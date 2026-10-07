@@ -1,8 +1,442 @@
 import { useEffect, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import './App.css'
+import { supabase } from './lib/supabase.js'
 
 function App() {
+  // =========================================================
+  // AUTENTICACIÓN CON SUPABASE
+  // =========================================================
+
+  const [sesion, setSesion] = useState(null)
+  const [cargandoSesion, setCargandoSesion] = useState(true)
+  const [correoLogin, setCorreoLogin] = useState('')
+  const [passwordLogin, setPasswordLogin] = useState('')
+  const [errorLogin, setErrorLogin] = useState('')
+  const [mensajeAuth, setMensajeAuth] = useState('')
+  const [procesandoLogin, setProcesandoLogin] = useState(false)
+  const [modoAuth, setModoAuth] = useState('login')
+  const [confirmarPassword, setConfirmarPassword] = useState('')
+
+  useEffect(() => {
+    let activo = true
+
+    const cargarSesion = async () => {
+      const { data, error } = await supabase.auth.getSession()
+
+      if (!activo) return
+
+      if (error) {
+        console.error('Error al recuperar la sesión:', error)
+      }
+
+      setSesion(data?.session ?? null)
+      setCargandoSesion(false)
+    }
+
+    cargarSesion()
+
+    const { data: suscripcion } = supabase.auth.onAuthStateChange(
+      (evento, nuevaSesion) => {
+        if (activo) {
+          setSesion(nuevaSesion)
+          setCargandoSesion(false)
+
+          if (evento === 'PASSWORD_RECOVERY') {
+            setModoAuth('nueva-password')
+            setErrorLogin('')
+            setMensajeAuth('Escribe tu nueva contraseña.')
+          }
+        }
+      }
+    )
+
+    return () => {
+      activo = false
+      suscripcion.subscription.unsubscribe()
+    }
+  }, [])
+  // =========================================================
+  // CARGAR DATOS FINANCIEROS DESDE SUPABASE
+  // =========================================================
+
+  const cargarDatosDesdeSupabase = async (userId) => {
+    try {
+      console.log('☁️ Cargando datos financieros desde Supabase...')
+
+      // -----------------------------------------------
+// Cargar TODOS los movimientos por páginas
+// -----------------------------------------------
+
+const movimientosCompletos = []
+
+const TAMANO_PAGINA = 1000
+let desde = 0
+let seguirCargando = true
+
+while (seguirCargando) {
+  const hasta = desde + TAMANO_PAGINA - 1
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from('movimientos')
+    .select('*')
+    .eq('user_id', userId)
+    .order('fecha', { ascending: false })
+    .range(desde, hasta)
+
+  if (error) {
+    throw error
+  }
+
+  const pagina = data || []
+
+  movimientosCompletos.push(...pagina)
+
+  console.log(
+    `☁️ Movimientos descargados: ${movimientosCompletos.length}`
+  )
+
+  if (pagina.length < TAMANO_PAGINA) {
+    seguirCargando = false
+  } else {
+    desde += TAMANO_PAGINA
+  }
+}
+
+// -----------------------------------------------
+// Los pagos son pocos y pueden cargarse normalmente
+// -----------------------------------------------
+
+const {
+  data: datosPagos,
+  error: errorPagos,
+} = await supabase
+  .from('pagos')
+  .select('*')
+  .eq('user_id', userId)
+  .order('fecha_vencimiento', {
+    ascending: true,
+  })
+
+if (errorPagos) {
+  throw errorPagos
+}
+
+      // -----------------------------------------------
+      // PostgreSQL -> formato que utiliza FinanzasApp
+      // -----------------------------------------------
+
+      const movimientosNube =
+            movimientosCompletos.map((movimiento) => ({
+          id: movimiento.id,
+          tipo: movimiento.tipo,
+          monto: Number(movimiento.monto),
+          concepto: movimiento.concepto,
+          categoria: movimiento.categoria,
+
+          metodoPago:
+            movimiento.metodo_pago || '',
+
+          notas:
+            movimiento.notas || '',
+
+          fecha:
+            movimiento.fecha,
+
+          origenPago:
+            movimiento.origen_pago || null,
+
+          origenImportacion:
+            movimiento.origen_importacion || null,
+
+          creadoEn:
+            movimiento.creado_en || null,
+
+          modificadoEn:
+            movimiento.modificado_en || null,
+        }))
+
+      const pagosNube =
+  (datosPagos || []).map((pago) => ({
+          id: pago.id,
+          concepto: pago.concepto,
+          monto: Number(pago.monto),
+
+          fechaVencimiento:
+            pago.fecha_vencimiento,
+
+          categoria:
+            pago.categoria || '',
+
+          metodoPago:
+            pago.metodo_pago || '',
+
+          modalidad:
+            pago.modalidad,
+
+          frecuencia:
+            pago.frecuencia || '',
+
+          pagoActual:
+            pago.pago_actual != null
+              ? Number(pago.pago_actual)
+              : null,
+
+          totalPagos:
+            pago.total_pagos != null
+              ? Number(pago.total_pagos)
+              : null,
+
+          estado:
+            pago.estado || 'pendiente',
+
+          fechaPago:
+            pago.fecha_pago || null,
+
+          fechaPausa:
+            pago.fecha_pausa || null,
+
+          pausadoEn:
+            pago.pausado_en || null,
+
+          reanudadoEn:
+            pago.reanudado_en || null,
+
+          fechaCancelacion:
+            pago.fecha_cancelacion || null,
+
+          canceladoEn:
+            pago.cancelado_en || null,
+
+          origenImportacion:
+            pago.origen_importacion || null,
+
+          categoriaOriginal:
+            pago.categoria_original || null,
+
+          creadoEn:
+            pago.creado_en || null,
+
+          modificadoEn:
+            pago.modificado_en || null,
+        }))
+
+      console.log(
+        `☁️ Supabase cargado: ${movimientosNube.length} movimientos y ${pagosNube.length} pagos`
+      )
+
+      return {
+        movimientos: movimientosNube,
+        pagos: pagosNube,
+      }
+    } catch (error) {
+      console.error(
+        '❌ Error cargando datos desde Supabase:',
+        error
+      )
+
+      return null
+    }
+  }
+    useEffect(() => {
+    if (!sesion?.user?.id) return
+
+    let activo = true
+
+    const cargarFinanzas = async () => {
+      const datos = await cargarDatosDesdeSupabase(
+        sesion.user.id
+      )
+
+      if (!activo || !datos) return
+
+      console.log(
+        '✅ Datos de Supabase preparados para FinanzasApp:',
+        {
+          movimientos: datos.movimientos.length,
+          pagos: datos.pagos.length,
+        }
+      )
+
+setMovimientos(datos.movimientos)
+setPagos(datos.pagos)
+
+console.log(
+  '☁️ FinanzasApp ahora está usando los datos cargados desde Supabase.'
+)
+    }
+
+    cargarFinanzas()
+
+    return () => {
+      activo = false
+    }
+  }, [sesion])
+  const iniciarSesion = async (e) => {
+    e.preventDefault()
+    setErrorLogin('')
+
+    const correo = correoLogin.trim()
+
+    if (!correo || !passwordLogin) {
+      setErrorLogin('Escribe tu correo y contraseña.')
+      return
+    }
+
+    setProcesandoLogin(true)
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: correo,
+      password: passwordLogin,
+    })
+
+    if (error) {
+      console.error('Error al iniciar sesión:', error)
+      setErrorLogin('No pudimos iniciar sesión. Revisa tu correo y contraseña.')
+      setProcesandoLogin(false)
+      return
+    }
+
+    setPasswordLogin('')
+    setProcesandoLogin(false)
+  }
+
+  const registrarUsuario = async (e) => {
+    e.preventDefault()
+    setErrorLogin('')
+    setMensajeAuth('')
+
+    const correo = correoLogin.trim()
+
+    if (!correo || !passwordLogin) {
+      setErrorLogin('Escribe tu correo y contraseña.')
+      return
+    }
+
+    if (passwordLogin.length < 6) {
+      setErrorLogin('La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+
+    if (passwordLogin !== confirmarPassword) {
+      setErrorLogin('Las contraseñas no coinciden.')
+      return
+    }
+
+    setProcesandoLogin(true)
+
+    const { data, error } = await supabase.auth.signUp({
+      email: correo,
+      password: passwordLogin,
+      options: {
+        emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`,
+      },
+    })
+
+    if (error) {
+      console.error('Error al registrar usuario:', error)
+      setErrorLogin(error.message || 'No pudimos crear la cuenta.')
+      setProcesandoLogin(false)
+      return
+    }
+
+    setPasswordLogin('')
+    setConfirmarPassword('')
+
+    if (data.session) {
+      setMensajeAuth('Cuenta creada correctamente.')
+    } else {
+      setMensajeAuth('Cuenta creada. Revisa tu correo para confirmar tu registro y después inicia sesión.')
+      setModoAuth('login')
+    }
+
+    setProcesandoLogin(false)
+  }
+
+  const solicitarRestablecimiento = async (e) => {
+    e.preventDefault()
+    setErrorLogin('')
+    setMensajeAuth('')
+
+    const correo = correoLogin.trim()
+
+    if (!correo) {
+      setErrorLogin('Escribe el correo de tu cuenta.')
+      return
+    }
+
+    setProcesandoLogin(true)
+
+    const { error } = await supabase.auth.resetPasswordForEmail(correo, {
+      redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`,
+    })
+
+    if (error) {
+      console.error('Error al solicitar recuperación:', error)
+      setErrorLogin('No pudimos enviar el correo de recuperación. Inténtalo nuevamente.')
+      setProcesandoLogin(false)
+      return
+    }
+
+    setMensajeAuth('Te enviamos un enlace para restablecer tu contraseña. Revisa también tu carpeta de correo no deseado.')
+    setProcesandoLogin(false)
+  }
+
+  const guardarNuevaPassword = async (e) => {
+    e.preventDefault()
+    setErrorLogin('')
+    setMensajeAuth('')
+
+    if (passwordLogin.length < 6) {
+      setErrorLogin('La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+
+    if (passwordLogin !== confirmarPassword) {
+      setErrorLogin('Las contraseñas no coinciden.')
+      return
+    }
+
+    setProcesandoLogin(true)
+
+    const { error } = await supabase.auth.updateUser({
+      password: passwordLogin,
+    })
+
+    if (error) {
+      console.error('Error al cambiar contraseña:', error)
+      setErrorLogin('No pudimos actualizar tu contraseña. Solicita un nuevo enlace de recuperación.')
+      setProcesandoLogin(false)
+      return
+    }
+
+    setPasswordLogin('')
+    setConfirmarPassword('')
+    setMensajeAuth('Contraseña actualizada correctamente.')
+    setModoAuth('login')
+    setProcesandoLogin(false)
+  }
+
+  const cambiarModoAuth = (modo) => {
+    setModoAuth(modo)
+    setErrorLogin('')
+    setMensajeAuth('')
+    setPasswordLogin('')
+    setConfirmarPassword('')
+  }
+
+  const cerrarSesion = async () => {
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      console.error('Error al cerrar sesión:', error)
+      alert('No pudimos cerrar la sesión. Inténtalo nuevamente.')
+    }
+  }
+
   // =========================================================
   // ESTADOS GENERALES
   // =========================================================
@@ -1435,75 +1869,159 @@ const importarDatos = (e) => {
   lector.readAsText(archivo)
 }
 // =========================================================
+// MIGRAR MOVIMIENTOS LOCALES A SUPABASE
+// =========================================================
+
+// =========================================================
 // REINICIAR DATOS FINANCIEROS
 // =========================================================
 
-const reiniciarDatosFinancieros = () => {
+const reiniciarDatosFinancieros = async () => {
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
+
   const confirmar = window.confirm(
-    `¿Quieres borrar todos los movimientos y pagos de FinanzasApp?\n\n` +
-    `Esta acción eliminará los datos financieros guardados en este dispositivo.\n\n` +
-    `Tus ajustes personales se conservarán.\n\n` +
-    `Antes de continuar es recomendable exportar un respaldo.`
+    `¿Quieres borrar TODOS tus movimientos y pagos de FinanzasApp?\n\n` +
+      `Esta acción eliminará también los datos guardados en Supabase, ` +
+      `por lo que desaparecerán de tus otros dispositivos.\n\n` +
+      `Tus ajustes personales se conservarán.\n\n` +
+      `Antes de continuar es recomendable exportar un respaldo.`
   )
 
   if (!confirmar) return
 
   const confirmarDefinitivo = window.confirm(
     `CONFIRMACIÓN FINAL\n\n` +
-    `Se eliminarán:\n` +
-    `• ${movimientos.length} movimientos\n` +
-    `• ${pagos.length} pagos\n\n` +
-    `Esta acción no se puede deshacer salvo que tengas un respaldo.\n\n` +
-    `¿Continuar?`
+      `Se eliminarán de tu cuenta:\n` +
+      `• ${movimientos.length} movimientos\n` +
+      `• ${pagos.length} pagos\n\n` +
+      `Esta acción no se puede deshacer salvo que tengas un respaldo.\n\n` +
+      `¿Eliminar definitivamente?`
   )
 
   if (!confirmarDefinitivo) return
 
-  setMovimientos([])
-  setPagos([])
-  setVistaPreviaExcel(null)
+  try {
+    // Primero eliminamos movimientos porque algunos están
+    // vinculados a pagos mediante origen_pago.
+    const { error: errorMovimientos } = await supabase
+      .from('movimientos')
+      .delete()
+      .eq('user_id', sesion.user.id)
 
-  localStorage.removeItem('finanzas_movimientos')
-  localStorage.removeItem('finanzas_pagos')
+    if (errorMovimientos) throw errorMovimientos
 
-  alert(
-    'Los datos financieros fueron reiniciados correctamente.'
-  )
+    const { error: errorPagos } = await supabase
+      .from('pagos')
+      .delete()
+      .eq('user_id', sesion.user.id)
+
+    if (errorPagos) throw errorPagos
+
+    setMovimientos([])
+    setPagos([])
+    setVistaPreviaExcel(null)
+
+    localStorage.removeItem('finanzas_movimientos')
+    localStorage.removeItem('finanzas_pagos')
+
+    console.log('☁️ Datos financieros eliminados de Supabase.')
+
+    alert(
+      'Los datos financieros fueron reiniciados correctamente en la nube y en este dispositivo.'
+    )
+  } catch (error) {
+    console.error(
+      '❌ Error reiniciando datos financieros:',
+      error
+    )
+
+    alert(
+      'No pudimos completar el reinicio de datos.\n\n' +
+        'Recarga FinanzasApp para volver a sincronizar el estado con Supabase antes de intentar otra operación.'
+    )
+  }
 }
+
   // =========================================================
   // GUARDAR MOVIMIENTO
   // =========================================================
 
-  const guardarMovimiento = (e) => {
-    e.preventDefault()
+ const guardarMovimiento = async (e) => {
+  e.preventDefault()
 
-    const monto = Number(formulario.monto)
+  const monto = Number(formulario.monto)
 
-    if (!monto || monto <= 0) {
-      alert('Ingresa un monto válido.')
-      return
-    }
+  if (!monto || monto <= 0) {
+    alert('Ingresa un monto válido.')
+    return
+  }
 
-    if (!formulario.concepto.trim()) {
-      alert('Ingresa un concepto.')
-      return
-    }
+  if (!formulario.concepto.trim()) {
+    alert('Ingresa un concepto.')
+    return
+  }
 
-    if (!formulario.categoria) {
-      alert('Selecciona una categoría.')
-      return
+  if (!formulario.categoria) {
+    alert('Selecciona una categoría.')
+    return
+  }
+
+  if (!formulario.fecha) {
+    alert('Selecciona una fecha.')
+    return
+  }
+
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
+
+  const id = crypto.randomUUID()
+  const creadoEn = new Date().toISOString()
+
+  const movimientoSupabase = {
+    id,
+    user_id: sesion.user.id,
+    tipo: formulario.tipo,
+    monto,
+    concepto: formulario.concepto.trim(),
+    categoria: formulario.categoria,
+    metodo_pago: formulario.metodoPago || null,
+    notas: formulario.notas.trim() || null,
+    fecha: formulario.fecha,
+    origen_pago: null,
+    origen_importacion: null,
+    creado_en: creadoEn,
+    modificado_en: null,
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('movimientos')
+      .insert(movimientoSupabase)
+      .select()
+      .single()
+
+    if (error) {
+      throw error
     }
 
     const nuevoMovimiento = {
-      id: crypto.randomUUID(),
-      tipo: formulario.tipo,
-      monto,
-      concepto: formulario.concepto.trim(),
-      categoria: formulario.categoria,
-      metodoPago: formulario.metodoPago,
-      notas: formulario.notas.trim(),
-      fecha: formulario.fecha,
-      creadoEn: new Date().toISOString(),
+      id: data.id,
+      tipo: data.tipo,
+      monto: Number(data.monto),
+      concepto: data.concepto,
+      categoria: data.categoria,
+      metodoPago: data.metodo_pago || '',
+      notas: data.notas || '',
+      fecha: data.fecha,
+      origenPago: data.origen_pago || null,
+      origenImportacion: data.origen_importacion || null,
+      creadoEn: data.creado_en || creadoEn,
+      modificadoEn: data.modificado_en || null,
     }
 
     setMovimientos((anteriores) => [
@@ -1517,16 +2035,27 @@ const reiniciarDatosFinancieros = () => {
     })
 
     setMostrarFormulario(false)
+
+    console.log(
+      '☁️ Movimiento guardado en Supabase:',
+      nuevoMovimiento
+    )
+  } catch (error) {
+    console.error(
+      '❌ Error guardando movimiento en Supabase:',
+      error
+    )
+
+    alert(
+      'No pudimos guardar el movimiento en la nube.\n\n' +
+      'No se agregó ningún movimiento para evitar inconsistencias.'
+    )
   }
+}
 
   // =========================================================
-  // ELIMINAR MOVIMIENTO
+  // DETALLE Y EDICIÓN DE MOVIMIENTOS
   // =========================================================
-
-
-  // =========================================================
-// DETALLE Y EDICIÓN DE MOVIMIENTOS
-// =========================================================
 
 const abrirDetalleMovimiento = (movimiento) => {
   setMovimientoSeleccionado(movimiento)
@@ -1569,19 +2098,22 @@ const cambiarTipoEdicion = (tipo) => {
   }))
 }
 
-const guardarEdicionMovimiento = (e) => {
+const guardarEdicionMovimiento = async (e) => {
   e.preventDefault()
 
   if (!movimientoSeleccionado) return
 
-  // Los movimientos generados desde pagos
-  // no se pueden modificar directamente.
   if (movimientoSeleccionado.origenPago) {
     alert(
       'Este movimiento fue generado desde un pago y no puede editarse directamente.'
     )
 
     setEditandoMovimiento(false)
+    return
+  }
+
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
     return
   }
 
@@ -1607,60 +2139,127 @@ const guardarEdicionMovimiento = (e) => {
     return
   }
 
-  const movimientoActualizado = {
-    ...movimientoSeleccionado,
+  const modificadoEn = new Date().toISOString()
 
-    tipo: formularioEdicion.tipo,
+  try {
+    const { data, error } = await supabase
+      .from('movimientos')
+      .update({
+        tipo: formularioEdicion.tipo,
+        monto,
+        concepto: formularioEdicion.concepto.trim(),
+        categoria: formularioEdicion.categoria,
+        metodo_pago:
+          formularioEdicion.metodoPago || null,
+        notas:
+          formularioEdicion.notas.trim() || null,
+        fecha: formularioEdicion.fecha,
+        modificado_en: modificadoEn,
+      })
+      .eq('id', movimientoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
 
-    monto,
-    concepto: formularioEdicion.concepto.trim(),
-    categoria: formularioEdicion.categoria,
-    metodoPago: formularioEdicion.metodoPago,
-    notas: formularioEdicion.notas.trim(),
-    fecha: formularioEdicion.fecha,
-    modificadoEn: new Date().toISOString(),
-  }
+    if (error) {
+      throw error
+    }
 
-  setMovimientos((anteriores) =>
-    anteriores.map((movimiento) =>
-      movimiento.id === movimientoSeleccionado.id
-        ? movimientoActualizado
-        : movimiento
+    const movimientoActualizado = {
+      ...movimientoSeleccionado,
+      tipo: data.tipo,
+      monto: Number(data.monto),
+      concepto: data.concepto,
+      categoria: data.categoria,
+      metodoPago: data.metodo_pago || '',
+      notas: data.notas || '',
+      fecha: data.fecha,
+      modificadoEn: data.modificado_en || modificadoEn,
+    }
+
+    setMovimientos((anteriores) =>
+      anteriores.map((movimiento) =>
+        movimiento.id === movimientoSeleccionado.id
+          ? movimientoActualizado
+          : movimiento
+      )
     )
-  )
 
-  setMovimientoSeleccionado(movimientoActualizado)
-  setEditandoMovimiento(false)
+    setMovimientoSeleccionado(
+      movimientoActualizado
+    )
+
+    setEditandoMovimiento(false)
+
+    console.log(
+      '☁️ Movimiento actualizado en Supabase:',
+      movimientoActualizado
+    )
+  } catch (error) {
+    console.error(
+      '❌ Error actualizando movimiento:',
+      error
+    )
+
+    alert(
+      'No pudimos actualizar el movimiento en la nube.'
+    )
+  }
 }
+// =========================================================
+// ELIMINAR MOVIMIENTO SELECCIONADO
+// =========================================================
 
-const eliminarMovimientoSeleccionado = () => {
+const eliminarMovimientoSeleccionado = async () => {
   if (!movimientoSeleccionado) return
 
-  // Protección de integridad.
   if (movimientoSeleccionado.origenPago) {
     alert(
-      'Este movimiento está vinculado a un pago realizado. Administra ese registro desde la sección Pagos.'
+      'Este movimiento fue generado desde un pago y no puede eliminarse directamente.'
     )
+    return
+  }
 
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
     return
   }
 
   const confirmar = window.confirm(
-    `¿Quieres eliminar "${movimientoSeleccionado.concepto}" por ${formatoDinero(
-      movimientoSeleccionado.monto
-    )}?`
+    `¿Quieres eliminar este movimiento?\n\n` +
+      `${movimientoSeleccionado.concepto}\n` +
+      `${formatoDinero(movimientoSeleccionado.monto)}\n\n` +
+      `También se eliminará de Supabase.`
   )
 
   if (!confirmar) return
 
-  setMovimientos((anteriores) =>
-    anteriores.filter(
-      (movimiento) =>
-        movimiento.id !== movimientoSeleccionado.id
-    )
-  )
+  try {
+    const { error } = await supabase
+      .from('movimientos')
+      .delete()
+      .eq('id', movimientoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
 
-  cerrarDetalleMovimiento()
+    if (error) throw error
+
+    setMovimientos((anteriores) =>
+      anteriores.filter(
+        (movimiento) => movimiento.id !== movimientoSeleccionado.id
+      )
+    )
+
+    setMovimientoSeleccionado(null)
+    setEditandoMovimiento(false)
+
+    console.log(
+      '☁️ Movimiento eliminado de Supabase:',
+      movimientoSeleccionado.id
+    )
+  } catch (error) {
+    console.error('❌ Error eliminando movimiento:', error)
+    alert('No pudimos eliminar el movimiento de la nube.')
+  }
 }
 
   // =========================================================
@@ -1751,22 +2350,24 @@ const cambiarModalidadEdicionPago = (modalidad) => {
   }))
 }
 
-const guardarEdicionPago = (e) => {
+const guardarEdicionPago = async (e) => {
   e.preventDefault()
 
   if (!pagoSeleccionado) return
 
-  const monto =
-    Number(formularioEdicionPago.monto)
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
+
+  const monto = Number(formularioEdicionPago.monto)
 
   if (!monto || monto <= 0) {
     alert('Ingresa un monto válido.')
     return
   }
 
-  if (
-    !formularioEdicionPago.concepto.trim()
-  ) {
+  if (!formularioEdicionPago.concepto.trim()) {
     alert('Ingresa un concepto.')
     return
   }
@@ -1776,162 +2377,162 @@ const guardarEdicionPago = (e) => {
     return
   }
 
-  if (
-    !formularioEdicionPago.fechaVencimiento
-  ) {
-    alert(
-      'Selecciona una fecha de vencimiento.'
-    )
+  if (!formularioEdicionPago.fechaVencimiento) {
+    alert('Selecciona una fecha de vencimiento.')
     return
   }
 
-  if (
-    formularioEdicionPago.modalidad ===
-    'plazo'
-  ) {
-    const actual =
-      Number(
-        formularioEdicionPago.pagoActual
-      )
+  if (formularioEdicionPago.modalidad === 'plazo') {
+    const actual = Number(formularioEdicionPago.pagoActual)
+    const total = Number(formularioEdicionPago.totalPagos)
 
-    const total =
-      Number(
-        formularioEdicionPago.totalPagos
-      )
-
-    if (
-      !actual ||
-      !total ||
-      actual < 1 ||
-      total < 1
-    ) {
-      alert(
-        'Revisa el número de pagos.'
-      )
+    if (!actual || !total || actual < 1 || total < 1) {
+      alert('Revisa el número de pagos.')
       return
     }
 
     if (actual > total) {
-      alert(
-        'El pago actual no puede ser mayor al total de pagos.'
-      )
+      alert('El pago actual no puede ser mayor al total de pagos.')
       return
     }
   }
 
-  const pagoActualizado = {
-    ...pagoSeleccionado,
+  const modificadoEn = new Date().toISOString()
 
-    concepto:
-      formularioEdicionPago.concepto.trim(),
-
+  const cambios = {
+    concepto: formularioEdicionPago.concepto.trim(),
     monto,
-
-    fechaVencimiento:
-      formularioEdicionPago.fechaVencimiento,
-
-    categoria:
-      formularioEdicionPago.categoria,
-
-    modalidad:
-      formularioEdicionPago.modalidad,
-
+    fecha_vencimiento: formularioEdicionPago.fechaVencimiento,
+    categoria: formularioEdicionPago.categoria,
+    modalidad: formularioEdicionPago.modalidad,
     frecuencia:
-      formularioEdicionPago.modalidad ===
-      'unico'
+      formularioEdicionPago.modalidad === 'unico'
         ? null
         : formularioEdicionPago.frecuencia,
-
-    pagoActual:
-      formularioEdicionPago.modalidad ===
-      'plazo'
-        ? Number(
-            formularioEdicionPago.pagoActual
-          )
+    pago_actual:
+      formularioEdicionPago.modalidad === 'plazo'
+        ? Number(formularioEdicionPago.pagoActual)
         : null,
-
-    totalPagos:
-      formularioEdicionPago.modalidad ===
-      'plazo'
-        ? Number(
-            formularioEdicionPago.totalPagos
-          )
+    total_pagos:
+      formularioEdicionPago.modalidad === 'plazo'
+        ? Number(formularioEdicionPago.totalPagos)
         : null,
-
-    modificadoEn:
-      new Date().toISOString(),
+    modificado_en: modificadoEn,
   }
 
-  setPagos((anteriores) =>
-    anteriores.map((pago) =>
-      pago.id === pagoSeleccionado.id
-        ? pagoActualizado
-        : pago
+  try {
+    const { data, error } = await supabase
+      .from('pagos')
+      .update(cambios)
+      .eq('id', pagoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    const pagoActualizado = {
+      ...pagoSeleccionado,
+      concepto: data.concepto,
+      monto: Number(data.monto),
+      fechaVencimiento: data.fecha_vencimiento,
+      categoria: data.categoria || '',
+      metodoPago: data.metodo_pago || '',
+      modalidad: data.modalidad,
+      frecuencia: data.frecuencia || '',
+      pagoActual:
+        data.pago_actual != null ? Number(data.pago_actual) : null,
+      totalPagos:
+        data.total_pagos != null ? Number(data.total_pagos) : null,
+      modificadoEn: data.modificado_en || modificadoEn,
+    }
+
+    setPagos((anteriores) =>
+      anteriores.map((pago) =>
+        pago.id === pagoSeleccionado.id
+          ? pagoActualizado
+          : pago
+      )
     )
-  )
 
-  setPagoSeleccionado(
-    pagoActualizado
-  )
+    setPagoSeleccionado(pagoActualizado)
+    setEditandoPago(false)
 
-  setEditandoPago(false)
+    console.log('☁️ Pago actualizado en Supabase:', pagoActualizado)
+  } catch (error) {
+    console.error('❌ Error actualizando pago:', error)
+    alert('No pudimos actualizar el pago en la nube.')
+  }
 }
+
 // =========================================================
 // ELIMINAR / CANCELAR PAGO PENDIENTE
 // =========================================================
 
-const eliminarPagoSeleccionado = () => {
+const eliminarPagoSeleccionado = async () => {
   if (!pagoSeleccionado) return
 
   if (pagoSeleccionado.estado !== 'pendiente') {
-    alert(
-      'Los pagos ya realizados no pueden eliminarse desde aquí.'
-    )
+    alert('Los pagos ya realizados no pueden eliminarse desde aquí.')
     return
   }
 
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
 
   let mensaje =
     `¿Quieres eliminar "${pagoSeleccionado.concepto}" por ` +
     `${formatoDinero(pagoSeleccionado.monto)}?`
 
-  if (
-    pagoSeleccionado.modalidad === 'recurrente'
-  ) {
+  if (pagoSeleccionado.modalidad === 'recurrente') {
     mensaje =
-      `¿Quieres cancelar "${pagoSeleccionado.concepto}"?\n\n` +
+      `¿Quieres eliminar "${pagoSeleccionado.concepto}"?\n\n` +
       `Este pago pendiente será eliminado y no generará el siguiente vencimiento.\n\n` +
       `Los pagos realizados anteriormente se conservarán.`
   }
 
-  if (
-    pagoSeleccionado.modalidad === 'plazo'
-  ) {
+  if (pagoSeleccionado.modalidad === 'plazo') {
     mensaje =
-      `¿Quieres cancelar el compromiso "${pagoSeleccionado.concepto}"?\n\n` +
-      `Se eliminará el pago ${pagoSeleccionado.pagoActual} de ${pagoSeleccionado.totalPagos} que está pendiente y no se generarán los pagos siguientes.\n\n` +
+      `¿Quieres eliminar el compromiso "${pagoSeleccionado.concepto}"?\n\n` +
+      `Se eliminará el pago ${pagoSeleccionado.pagoActual} de ` +
+      `${pagoSeleccionado.totalPagos} que está pendiente.\n\n` +
       `Los pagos realizados anteriormente se conservarán.`
   }
 
-  const confirmar =
-    window.confirm(mensaje)
+  if (!window.confirm(mensaje)) return
 
-  if (!confirmar) return
+  try {
+    const { error } = await supabase
+      .from('pagos')
+      .delete()
+      .eq('id', pagoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
 
-  setPagos((anteriores) =>
-    anteriores.filter(
-      (pago) =>
-        pago.id !== pagoSeleccionado.id
+    if (error) throw error
+
+    setPagos((anteriores) =>
+      anteriores.filter((pago) => pago.id !== pagoSeleccionado.id)
     )
-  )
 
-  cerrarDetallePago()
+    cerrarDetallePago()
+
+    console.log(
+      '☁️ Pago eliminado de Supabase:',
+      pagoSeleccionado.id
+    )
+  } catch (error) {
+    console.error('❌ Error eliminando pago:', error)
+    alert('No pudimos eliminar el pago de la nube.')
+  }
 }
+
 // =========================================================
 // PAUSAR / REANUDAR PAGO RECURRENTE
 // =========================================================
 
-const pausarPagoSeleccionado = () => {
+const pausarPagoSeleccionado = async () => {
   if (!pagoSeleccionado) return
 
   if (
@@ -1941,40 +2542,73 @@ const pausarPagoSeleccionado = () => {
     return
   }
 
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
+
   const confirmar = window.confirm(
     `¿Quieres pausar "${pagoSeleccionado.concepto}"?\n\n` +
-    `Mientras esté pausado no contará como dinero comprometido y no generará nuevos vencimientos.\n\n` +
-    `Podrás reanudarlo cuando quieras.`
+      `Mientras esté pausado no contará como dinero comprometido y no generará nuevos vencimientos.\n\n` +
+      `Podrás reanudarlo cuando quieras.`
   )
 
   if (!confirmar) return
 
-  const pagoPausado = {
-    ...pagoSeleccionado,
-    estado: 'pausado',
-    fechaPausa: new Date().toISOString().split('T')[0],
-    pausadoEn: new Date().toISOString(),
-  }
+  const fechaPausa = new Date().toISOString().split('T')[0]
+  const pausadoEn = new Date().toISOString()
 
-  setPagos((anteriores) =>
-    anteriores.map((pago) =>
-      pago.id === pagoSeleccionado.id
-        ? pagoPausado
-        : pago
+  try {
+    const { data, error } = await supabase
+      .from('pagos')
+      .update({
+        estado: 'pausado',
+        fecha_pausa: fechaPausa,
+        pausado_en: pausadoEn,
+        modificado_en: pausadoEn,
+      })
+      .eq('id', pagoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    const pagoPausado = {
+      ...pagoSeleccionado,
+      estado: data.estado,
+      fechaPausa: data.fecha_pausa,
+      pausadoEn: data.pausado_en,
+      modificadoEn: data.modificado_en,
+    }
+
+    setPagos((anteriores) =>
+      anteriores.map((pago) =>
+        pago.id === pagoSeleccionado.id ? pagoPausado : pago
+      )
     )
-  )
 
-  cerrarDetallePago()
+    cerrarDetallePago()
+    console.log('☁️ Pago pausado en Supabase:', pagoPausado.id)
+  } catch (error) {
+    console.error('❌ Error pausando pago:', error)
+    alert('No pudimos pausar el pago en la nube.')
+  }
 }
 
-const reanudarPago = (pagoPausado) => {
+const reanudarPago = async (pagoPausado) => {
   if (!pagoPausado || pagoPausado.estado !== 'pausado') return
+
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
 
   const fechaSugerida = new Date().toISOString().split('T')[0]
 
   const nuevaFecha = window.prompt(
     `¿Cuál será el próximo vencimiento de "${pagoPausado.concepto}"?\n\n` +
-    `Escribe la fecha en formato AAAA-MM-DD.`,
+      `Escribe la fecha en formato AAAA-MM-DD.`,
     fechaSugerida
   )
 
@@ -1999,35 +2633,63 @@ const reanudarPago = (pagoPausado) => {
     return
   }
 
-  const pagoReanudado = {
-    ...pagoPausado,
-    estado: 'pendiente',
-    fechaVencimiento: fecha,
-    fechaPausa: null,
-    pausadoEn: null,
-    reanudadoEn: new Date().toISOString(),
-  }
+  const reanudadoEn = new Date().toISOString()
 
-  setPagos((anteriores) =>
-    anteriores.map((pago) =>
-      pago.id === pagoPausado.id
-        ? pagoReanudado
-        : pago
+  try {
+    const { data, error } = await supabase
+      .from('pagos')
+      .update({
+        estado: 'pendiente',
+        fecha_vencimiento: fecha,
+        fecha_pausa: null,
+        pausado_en: null,
+        reanudado_en: reanudadoEn,
+        modificado_en: reanudadoEn,
+      })
+      .eq('id', pagoPausado.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    const pagoReanudado = {
+      ...pagoPausado,
+      estado: data.estado,
+      fechaVencimiento: data.fecha_vencimiento,
+      fechaPausa: null,
+      pausadoEn: null,
+      reanudadoEn: data.reanudado_en,
+      modificadoEn: data.modificado_en,
+    }
+
+    setPagos((anteriores) =>
+      anteriores.map((pago) =>
+        pago.id === pagoPausado.id ? pagoReanudado : pago
+      )
     )
-  )
+
+    console.log('☁️ Pago reanudado en Supabase:', pagoReanudado.id)
+  } catch (error) {
+    console.error('❌ Error reanudando pago:', error)
+    alert('No pudimos reanudar el pago en la nube.')
+  }
 }
 
 // =========================================================
 // CANCELAR COMPROMISO
 // =========================================================
 
-const cancelarPagoSeleccionado = () => {
+const cancelarPagoSeleccionado = async () => {
   if (!pagoSeleccionado) return
 
   if (pagoSeleccionado.estado !== 'pendiente') {
-    alert(
-      'Sólo se pueden cancelar pagos que estén pendientes.'
-    )
+    alert('Sólo se pueden cancelar pagos que estén pendientes.')
+    return
+  }
+
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
     return
   }
 
@@ -2036,9 +2698,7 @@ const cancelarPagoSeleccionado = () => {
     `El compromiso dejará de afectar tu dinero disponible, ` +
     `pero permanecerá en tu historial.`
 
-  if (
-    pagoSeleccionado.modalidad === 'recurrente'
-  ) {
+  if (pagoSeleccionado.modalidad === 'recurrente') {
     mensaje =
       `¿Quieres cancelar "${pagoSeleccionado.concepto}"?\n\n` +
       `Este compromiso dejará de estar pendiente y no generará ` +
@@ -2046,53 +2706,69 @@ const cancelarPagoSeleccionado = () => {
       `El registro permanecerá en tu historial.`
   }
 
-  if (
-    pagoSeleccionado.modalidad === 'plazo'
-  ) {
+  if (pagoSeleccionado.modalidad === 'plazo') {
     mensaje =
       `¿Quieres cancelar "${pagoSeleccionado.concepto}"?\n\n` +
       `Se cancelará el pago ${pagoSeleccionado.pagoActual} de ` +
       `${pagoSeleccionado.totalPagos} y no se generarán los ` +
       `pagos siguientes.\n\n` +
-      `Los pagos anteriores y este registro permanecerán ` +
-      `en tu historial.`
+      `Los pagos anteriores y este registro permanecerán en tu historial.`
   }
 
-  const confirmar =
-    window.confirm(mensaje)
+  if (!window.confirm(mensaje)) return
 
-  if (!confirmar) return
+  const fechaCancelacion = new Date().toISOString().split('T')[0]
+  const canceladoEn = new Date().toISOString()
 
-  const pagoCancelado = {
-    ...pagoSeleccionado,
+  try {
+    const { data, error } = await supabase
+      .from('pagos')
+      .update({
+        estado: 'cancelado',
+        fecha_cancelacion: fechaCancelacion,
+        cancelado_en: canceladoEn,
+        modificado_en: canceladoEn,
+      })
+      .eq('id', pagoSeleccionado.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
 
-    estado: 'cancelado',
+    if (error) throw error
 
-    fechaCancelacion:
-      new Date()
-        .toISOString()
-        .split('T')[0],
+    const pagoCancelado = {
+      ...pagoSeleccionado,
+      estado: data.estado,
+      fechaCancelacion: data.fecha_cancelacion,
+      canceladoEn: data.cancelado_en,
+      modificadoEn: data.modificado_en,
+    }
 
-    canceladoEn:
-      new Date().toISOString(),
-  }
-
-  setPagos((anteriores) =>
-    anteriores.map((pago) =>
-      pago.id === pagoSeleccionado.id
-        ? pagoCancelado
-        : pago
+    setPagos((anteriores) =>
+      anteriores.map((pago) =>
+        pago.id === pagoSeleccionado.id ? pagoCancelado : pago
+      )
     )
-  )
 
-  cerrarDetallePago()
+    cerrarDetallePago()
+    console.log('☁️ Pago cancelado en Supabase:', pagoCancelado.id)
+  } catch (error) {
+    console.error('❌ Error cancelando pago:', error)
+    alert('No pudimos cancelar el pago en la nube.')
+  }
 }
+
   // =========================================================
   // GUARDAR PAGO
   // =========================================================
 
-  const guardarPago = (e) => {
+const guardarPago = async (e) => {
     e.preventDefault()
+
+    if (!sesion?.user?.id) {
+      alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+      return
+    }
 
     const monto = Number(formularioPago.monto)
 
@@ -2111,7 +2787,11 @@ const cancelarPagoSeleccionado = () => {
       return
     }
 
-    // Validación exclusiva para pagos a plazo
+    if (!formularioPago.fechaVencimiento) {
+      alert('Selecciona una fecha de vencimiento.')
+      return
+    }
+
     if (formularioPago.modalidad === 'plazo') {
       const actual = Number(formularioPago.pagoActual)
       const total = Number(formularioPago.totalPagos)
@@ -2122,61 +2802,104 @@ const cancelarPagoSeleccionado = () => {
       }
 
       if (actual > total) {
-        alert(
-          'El pago actual no puede ser mayor al total de pagos.'
-        )
+        alert('El pago actual no puede ser mayor al total de pagos.')
         return
       }
     }
 
-    const nuevoPago = {
-      id: crypto.randomUUID(),
+    const id = crypto.randomUUID()
+    const creadoEn = new Date().toISOString()
 
+    const pagoSupabase = {
+      id,
+      user_id: sesion.user.id,
       concepto: formularioPago.concepto.trim(),
-
       monto,
-
-      fechaVencimiento:
-        formularioPago.fechaVencimiento,
-
+      fecha_vencimiento: formularioPago.fechaVencimiento,
       categoria: formularioPago.categoria,
-
+      metodo_pago: null,
       modalidad: formularioPago.modalidad,
-
       frecuencia:
         formularioPago.modalidad === 'unico'
           ? null
           : formularioPago.frecuencia,
-
-      pagoActual:
+      pago_actual:
         formularioPago.modalidad === 'plazo'
           ? Number(formularioPago.pagoActual)
           : null,
-
-      totalPagos:
+      total_pagos:
         formularioPago.modalidad === 'plazo'
           ? Number(formularioPago.totalPagos)
           : null,
-
       estado: 'pendiente',
-
-      fechaPago: null,
-
-      creadoEn: new Date().toISOString(),
+      fecha_pago: null,
+      fecha_pausa: null,
+      pausado_en: null,
+      reanudado_en: null,
+      fecha_cancelacion: null,
+      cancelado_en: null,
+      origen_importacion: null,
+      categoria_original: null,
+      creado_en: creadoEn,
+      modificado_en: null,
     }
 
-    setPagos((anteriores) => [
-      ...anteriores,
-      nuevoPago,
-    ])
+    try {
+      const { data, error } = await supabase
+        .from('pagos')
+        .insert(pagoSupabase)
+        .select()
+        .single()
 
-    setFormularioPago({
-      ...pagoInicial,
-      fechaVencimiento:
-        new Date().toISOString().split('T')[0],
-    })
+      if (error) throw error
 
-    setMostrarFormularioPago(false)
+      const nuevoPago = {
+        id: data.id,
+        concepto: data.concepto,
+        monto: Number(data.monto),
+        fechaVencimiento: data.fecha_vencimiento,
+        categoria: data.categoria || '',
+        metodoPago: data.metodo_pago || '',
+        modalidad: data.modalidad,
+        frecuencia: data.frecuencia || '',
+        pagoActual:
+          data.pago_actual != null ? Number(data.pago_actual) : null,
+        totalPagos:
+          data.total_pagos != null ? Number(data.total_pagos) : null,
+        estado: data.estado || 'pendiente',
+        fechaPago: data.fecha_pago || null,
+        fechaPausa: data.fecha_pausa || null,
+        pausadoEn: data.pausado_en || null,
+        reanudadoEn: data.reanudado_en || null,
+        fechaCancelacion: data.fecha_cancelacion || null,
+        canceladoEn: data.cancelado_en || null,
+        origenImportacion: data.origen_importacion || null,
+        categoriaOriginal: data.categoria_original || null,
+        creadoEn: data.creado_en || creadoEn,
+        modificadoEn: data.modificado_en || null,
+      }
+
+      setPagos((anteriores) => [
+        ...anteriores,
+        nuevoPago,
+      ])
+
+      setFormularioPago({
+        ...pagoInicial,
+        fechaVencimiento:
+          new Date().toISOString().split('T')[0],
+      })
+
+      setMostrarFormularioPago(false)
+
+      console.log('☁️ Pago guardado en Supabase:', nuevoPago)
+    } catch (error) {
+      console.error('❌ Error guardando pago:', error)
+      alert(
+        'No pudimos guardar el pago en la nube.\n\n' +
+          'No se agregó ningún pago para evitar inconsistencias.'
+      )
+    }
   }
 
   // =========================================================
@@ -2245,7 +2968,7 @@ const cancelarPagoSeleccionado = () => {
   setMetodoPagoConfirmacion('')
 }
 
-const confirmarPago = () => {
+const confirmarPago = async () => {
   if (!pagoPorConfirmar) return
 
   if (!metodoPagoConfirmacion) {
@@ -2253,24 +2976,198 @@ const confirmarPago = () => {
     return
   }
 
+  if (!sesion?.user?.id) {
+    alert('Tu sesión no está disponible. Inicia sesión nuevamente.')
+    return
+  }
+
   const pago = pagoPorConfirmar
+  const fechaHoy = new Date().toISOString().split('T')[0]
+  const ahora = new Date().toISOString()
+  const movimientoId = crypto.randomUUID()
 
-  
-    const fechaHoy =
-      new Date().toISOString().split('T')[0]
+  let siguientePago = null
 
-    // Al pagar un compromiso, automáticamente
-    // se convierte en un gasto real.
-    const nuevoMovimiento = {
+  if (pago.modalidad === 'recurrente') {
+    siguientePago = {
+      ...pago,
       id: crypto.randomUUID(),
-      tipo: 'gasto',
-      monto: Number(pago.monto),
-      concepto: pago.concepto,
-      categoria: pago.categoria,
-      metodoPago: metodoPagoConfirmacion,
-      fecha: fechaHoy,
-      creadoEn: new Date().toISOString(),
-      origenPago: pago.id,
+      fechaVencimiento: calcularSiguienteFecha(
+        pago.fechaVencimiento,
+        pago.frecuencia
+      ),
+      estado: 'pendiente',
+      fechaPago: null,
+      fechaPausa: null,
+      pausadoEn: null,
+      reanudadoEn: null,
+      fechaCancelacion: null,
+      canceladoEn: null,
+      creadoEn: ahora,
+      modificadoEn: null,
+    }
+  }
+
+  if (
+    pago.modalidad === 'plazo' &&
+    Number(pago.pagoActual) < Number(pago.totalPagos)
+  ) {
+    siguientePago = {
+      ...pago,
+      id: crypto.randomUUID(),
+      pagoActual: Number(pago.pagoActual) + 1,
+      fechaVencimiento: calcularSiguienteFecha(
+        pago.fechaVencimiento,
+        pago.frecuencia
+      ),
+      estado: 'pendiente',
+      fechaPago: null,
+      fechaPausa: null,
+      pausadoEn: null,
+      reanudadoEn: null,
+      fechaCancelacion: null,
+      canceladoEn: null,
+      creadoEn: ahora,
+      modificadoEn: null,
+    }
+  }
+
+  const filaSiguientePago = siguientePago
+    ? {
+        id: siguientePago.id,
+        user_id: sesion.user.id,
+        concepto: siguientePago.concepto,
+        monto: Number(siguientePago.monto),
+        fecha_vencimiento: siguientePago.fechaVencimiento,
+        categoria: siguientePago.categoria || null,
+        metodo_pago: siguientePago.metodoPago || null,
+        modalidad: siguientePago.modalidad,
+        frecuencia: siguientePago.frecuencia || null,
+        pago_actual:
+          siguientePago.pagoActual != null
+            ? Number(siguientePago.pagoActual)
+            : null,
+        total_pagos:
+          siguientePago.totalPagos != null
+            ? Number(siguientePago.totalPagos)
+            : null,
+        estado: 'pendiente',
+        fecha_pago: null,
+        fecha_pausa: null,
+        pausado_en: null,
+        reanudado_en: null,
+        fecha_cancelacion: null,
+        cancelado_en: null,
+        origen_importacion: siguientePago.origenImportacion || null,
+        categoria_original: siguientePago.categoriaOriginal || null,
+        creado_en: ahora,
+        modificado_en: null,
+      }
+    : null
+
+  try {
+    // 1. Marcamos el compromiso actual como pagado.
+    const { data: pagoPagadoDb, error: errorPago } = await supabase
+      .from('pagos')
+      .update({
+        estado: 'pagado',
+        fecha_pago: fechaHoy,
+        metodo_pago: metodoPagoConfirmacion,
+        modificado_en: ahora,
+      })
+      .eq('id', pago.id)
+      .eq('user_id', sesion.user.id)
+      .select()
+      .single()
+
+    if (errorPago) throw errorPago
+
+    // 2. Creamos el gasto real vinculado al pago.
+    const { data: movimientoDb, error: errorMovimiento } = await supabase
+      .from('movimientos')
+      .insert({
+        id: movimientoId,
+        user_id: sesion.user.id,
+        tipo: 'gasto',
+        monto: Number(pago.monto),
+        concepto: pago.concepto,
+        categoria: pago.categoria,
+        metodo_pago: metodoPagoConfirmacion,
+        notas: null,
+        fecha: fechaHoy,
+        origen_pago: pago.id,
+        origen_importacion: null,
+        creado_en: ahora,
+        modificado_en: null,
+      })
+      .select()
+      .single()
+
+    if (errorMovimiento) {
+      // Compensación: si no se pudo crear el movimiento,
+      // regresamos el pago a pendiente.
+      await supabase
+        .from('pagos')
+        .update({
+          estado: 'pendiente',
+          fecha_pago: null,
+          modificado_en: new Date().toISOString(),
+        })
+        .eq('id', pago.id)
+        .eq('user_id', sesion.user.id)
+
+      throw errorMovimiento
+    }
+
+    // 3. Si corresponde, creamos el siguiente vencimiento.
+    if (filaSiguientePago) {
+      const { error: errorSiguiente } = await supabase
+        .from('pagos')
+        .insert(filaSiguientePago)
+
+      if (errorSiguiente) {
+        // Compensación para no dejar un pago recurrente/plazo cortado.
+        await supabase
+          .from('movimientos')
+          .delete()
+          .eq('id', movimientoId)
+          .eq('user_id', sesion.user.id)
+
+        await supabase
+          .from('pagos')
+          .update({
+            estado: 'pendiente',
+            fecha_pago: null,
+            modificado_en: new Date().toISOString(),
+          })
+          .eq('id', pago.id)
+          .eq('user_id', sesion.user.id)
+
+        throw errorSiguiente
+      }
+    }
+
+    const nuevoMovimiento = {
+      id: movimientoDb.id,
+      tipo: movimientoDb.tipo,
+      monto: Number(movimientoDb.monto),
+      concepto: movimientoDb.concepto,
+      categoria: movimientoDb.categoria,
+      metodoPago: movimientoDb.metodo_pago || '',
+      notas: movimientoDb.notas || '',
+      fecha: movimientoDb.fecha,
+      origenPago: movimientoDb.origen_pago || null,
+      origenImportacion: movimientoDb.origen_importacion || null,
+      creadoEn: movimientoDb.creado_en || ahora,
+      modificadoEn: movimientoDb.modificado_en || null,
+    }
+
+    const pagoPagado = {
+      ...pago,
+      estado: pagoPagadoDb.estado,
+      fechaPago: pagoPagadoDb.fecha_pago,
+      metodoPago: pagoPagadoDb.metodo_pago || metodoPagoConfirmacion,
+      modificadoEn: pagoPagadoDb.modificado_en || ahora,
     }
 
     setMovimientos((anteriores) => [
@@ -2279,94 +3176,33 @@ const confirmarPago = () => {
     ])
 
     setPagos((anteriores) => {
-      // Primero marcamos el pago actual como pagado.
-      const actualizados = anteriores.map(
-        (pagoActual) =>
-          pagoActual.id === pago.id
-            ? {
-                ...pagoActual,
-                estado: 'pagado',
-                fechaPago: fechaHoy,
-              }
-            : pagoActual
+      const actualizados = anteriores.map((item) =>
+        item.id === pago.id ? pagoPagado : item
       )
 
-      // =============================================
-      // PAGO RECURRENTE
-      // =============================================
+      return siguientePago
+        ? [...actualizados, siguientePago]
+        : actualizados
+    })
 
-      if (pago.modalidad === 'recurrente') {
-        const siguientePago = {
-          ...pago,
+    setPagoPorConfirmar(null)
+    setMetodoPagoConfirmacion('')
 
-          id: crypto.randomUUID(),
-
-          fechaVencimiento:
-            calcularSiguienteFecha(
-              pago.fechaVencimiento,
-              pago.frecuencia
-            ),
-
-          estado: 'pendiente',
-
-          fechaPago: null,
-
-          creadoEn: new Date().toISOString(),
-
-          pagoAnterior: pago.id,
-        }
-
-        return [
-          ...actualizados,
-          siguientePago,
-        ]
+    console.log(
+      '☁️ Pago confirmado en Supabase y movimiento generado:',
+      {
+        pago: pagoPagado.id,
+        movimiento: nuevoMovimiento.id,
+        siguientePago: siguientePago?.id || null,
       }
-
-      // =============================================
-      // PAGO A PLAZO
-      // =============================================
-
-      if (
-        pago.modalidad === 'plazo' &&
-        Number(pago.pagoActual) <
-          Number(pago.totalPagos)
-      ) {
-        const siguientePago = {
-          ...pago,
-
-          id: crypto.randomUUID(),
-
-          pagoActual:
-            Number(pago.pagoActual) + 1,
-
-          fechaVencimiento:
-            calcularSiguienteFecha(
-              pago.fechaVencimiento,
-              pago.frecuencia
-            ),
-
-          estado: 'pendiente',
-
-          fechaPago: null,
-
-          creadoEn: new Date().toISOString(),
-
-          pagoAnterior: pago.id,
-        }
-
-        return [
-          ...actualizados,
-          siguientePago,
-        ]
-      }
-
-  // Si es pago único o llegó al último
-// pago del plazo, no genera otro.
-return actualizados
-})
-
-setPagoPorConfirmar(null)
-setMetodoPagoConfirmacion('')
+    )
+  } catch (error) {
+    console.error('❌ Error confirmando pago:', error)
+    alert(
+      'No pudimos completar el pago en la nube.\n\n' +
+        'La operación se detuvo para evitar inconsistencias.'
+    )
+  }
 }
 
   // =========================================================
@@ -2649,6 +3485,203 @@ const esMesActual =
   // INTERFAZ
   // =========================================================
 
+  if (cargandoSesion) {
+    return (
+      <div className="app" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+        <div style={{ textAlign: 'center', padding: '32px' }}>
+          <h2 style={{ marginBottom: '8px' }}>FinanzasApp</h2>
+          <p>Comprobando tu sesión...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!sesion || modoAuth === 'nueva-password') {
+    const esRegistro = modoAuth === 'registro'
+    const esRecuperacion = modoAuth === 'recuperar'
+    const esNuevaPassword = modoAuth === 'nueva-password'
+
+    const manejarAuth = esRegistro
+      ? registrarUsuario
+      : esRecuperacion
+        ? solicitarRestablecimiento
+        : esNuevaPassword
+          ? guardarNuevaPassword
+          : iniciarSesion
+
+    return (
+      <div
+        className="app"
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          padding: '24px',
+        }}
+      >
+        <form
+          onSubmit={manejarAuth}
+          style={{
+            width: '100%',
+            maxWidth: '390px',
+            background: '#ffffff',
+            borderRadius: '24px',
+            padding: '28px',
+            boxShadow: '0 18px 50px rgba(15, 23, 42, 0.12)',
+          }}
+        >
+          <div style={{ marginBottom: '24px' }}>
+            <p style={{ margin: 0, opacity: 0.65, fontSize: '14px' }}>
+              {esRegistro
+                ? 'Nueva cuenta ✨'
+                : esRecuperacion
+                  ? 'Recuperar acceso 🔐'
+                  : esNuevaPassword
+                    ? 'Nueva contraseña 🔑'
+                    : 'Bienvenido 👋'}
+            </p>
+            <h1 style={{ margin: '4px 0 8px' }}>FinanzasApp</h1>
+            <p style={{ margin: 0, opacity: 0.7 }}>
+              {esRegistro
+                ? 'Crea tu cuenta para comenzar.'
+                : esRecuperacion
+                  ? 'Te enviaremos un enlace para cambiar tu contraseña.'
+                  : esNuevaPassword
+                    ? 'Elige una nueva contraseña para tu cuenta.'
+                    : 'Inicia sesión para entrar a tus finanzas.'}
+            </p>
+          </div>
+
+          {!esNuevaPassword && (
+            <div className="campo">
+              <label>Correo electrónico</label>
+              <input
+                type="email"
+                value={correoLogin}
+                onChange={(e) => setCorreoLogin(e.target.value)}
+                autoComplete="email"
+                placeholder="tu@correo.com"
+                required
+              />
+            </div>
+          )}
+
+          {!esRecuperacion && (
+            <div className="campo">
+              <label>{esNuevaPassword ? 'Nueva contraseña' : 'Contraseña'}</label>
+              <input
+                type="password"
+                value={passwordLogin}
+                onChange={(e) => setPasswordLogin(e.target.value)}
+                autoComplete={esRegistro || esNuevaPassword ? 'new-password' : 'current-password'}
+                placeholder={esNuevaPassword ? 'Tu nueva contraseña' : 'Tu contraseña'}
+                required
+              />
+            </div>
+          )}
+
+          {(esRegistro || esNuevaPassword) && (
+            <div className="campo">
+              <label>Confirmar contraseña</label>
+              <input
+                type="password"
+                value={confirmarPassword}
+                onChange={(e) => setConfirmarPassword(e.target.value)}
+                autoComplete="new-password"
+                placeholder="Repite tu contraseña"
+                required
+              />
+            </div>
+          )}
+
+          {errorLogin && (
+            <p
+              role="alert"
+              style={{
+                background: '#fff1f2',
+                padding: '12px 14px',
+                borderRadius: '12px',
+                margin: '12px 0',
+              }}
+            >
+              {errorLogin}
+            </p>
+          )}
+
+          {mensajeAuth && (
+            <p
+              role="status"
+              style={{
+                background: '#ecfdf5',
+                padding: '12px 14px',
+                borderRadius: '12px',
+                margin: '12px 0',
+              }}
+            >
+              {mensajeAuth}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            className="boton-guardar"
+            disabled={procesandoLogin}
+            style={{ width: '100%', marginTop: '8px' }}
+          >
+            {procesandoLogin
+              ? 'Procesando...'
+              : esRegistro
+                ? 'Crear cuenta'
+                : esRecuperacion
+                  ? 'Enviar enlace de recuperación'
+                  : esNuevaPassword
+                    ? 'Guardar nueva contraseña'
+                    : 'Iniciar sesión'}
+          </button>
+
+          {modoAuth === 'login' && (
+            <div style={{ marginTop: '18px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => cambiarModoAuth('recuperar')}
+                style={{ border: 0, background: 'transparent', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                ¿Olvidaste tu contraseña?
+              </button>
+
+              <p style={{ margin: '12px 0 0', fontSize: '14px' }}>
+                ¿No tienes cuenta?{' '}
+                <button
+                  type="button"
+                  onClick={() => cambiarModoAuth('registro')}
+                  style={{ border: 0, background: 'transparent', cursor: 'pointer', fontWeight: 700, textDecoration: 'underline' }}
+                >
+                  Crear cuenta
+                </button>
+              </p>
+            </div>
+          )}
+
+          {(esRegistro || esRecuperacion) && (
+            <div style={{ marginTop: '18px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={() => cambiarModoAuth('login')}
+                style={{ border: 0, background: 'transparent', cursor: 'pointer', textDecoration: 'underline' }}
+              >
+                ← Volver a iniciar sesión
+              </button>
+            </div>
+          )}
+
+          <p style={{ margin: '18px 0 0', textAlign: 'center', fontSize: '12px', opacity: 0.6 }}>
+            Tus datos financieros locales no se modificarán al autenticarte.
+          </p>
+        </form>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       {/* ================= HEADER ================= */}
@@ -2666,10 +3699,27 @@ const esMesActual =
           <h1>Mis Finanzas</h1>
         </div>
 
-<div className="avatar">
-  {ajustes.nombre
-    ? ajustes.nombre.charAt(0).toUpperCase()
-    : 'D'}
+<div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+  <div className="avatar">
+    {ajustes.nombre
+      ? ajustes.nombre.charAt(0).toUpperCase()
+      : 'D'}
+  </div>
+
+  <button
+    type="button"
+    onClick={cerrarSesion}
+    title={sesion.user?.email || 'Cerrar sesión'}
+    style={{
+      border: 'none',
+      background: 'transparent',
+      cursor: 'pointer',
+      fontSize: '13px',
+      textDecoration: 'underline',
+    }}
+  >
+    Salir
+  </button>
 </div>
       </header>
 
@@ -4217,23 +5267,6 @@ const esMesActual =
           </span>
         </div>
 
-        <div className="separador-ajuste" />
-
-        <div className="fila-ajuste">
-          <div>
-            <strong>
-              Respaldo
-            </strong>
-
-            <span>
-              Protege tu información financiera
-            </span>
-          </div>
-
-          <span className="estado-proximamente">
-            Próximamente
-          </span>
-        </div>
       </div>
     </div>
 
