@@ -85,6 +85,7 @@ while (seguirCargando) {
     .select('*')
     .eq('user_id', userId)
     .order('fecha', { ascending: false })
+    .order('id', { ascending: true })
     .range(desde, hasta)
 
   if (error) {
@@ -275,6 +276,136 @@ console.log(
       activo = false
     }
   }, [sesion])
+
+  // =========================================================
+  // SINCRONIZACIÓN AUTOMÁTICA ENTRE DISPOSITIVOS
+  // =========================================================
+  useEffect(() => {
+    if (!sesion?.user?.id) return
+
+    const userId = sesion.user.id
+    let activo = true
+    let temporizador = null
+    let sincronizando = false
+    let sincronizacionPendiente = false
+
+    const sincronizarDesdeNube = async (motivo = 'cambio remoto') => {
+      if (!activo) return
+
+      if (sincronizando) {
+        sincronizacionPendiente = true
+        return
+      }
+
+      sincronizando = true
+
+      try {
+        const datos = await cargarDatosDesdeSupabase(userId)
+
+        if (!activo || !datos) return
+
+        setMovimientos(datos.movimientos)
+        setPagos(datos.pagos)
+
+        console.log(
+          `🔄 FinanzasApp sincronizada automáticamente (${motivo}).`
+        )
+      } finally {
+        sincronizando = false
+
+        if (activo && sincronizacionPendiente) {
+          sincronizacionPendiente = false
+          sincronizarDesdeNube('cambios acumulados')
+        }
+      }
+    }
+
+    const programarSincronizacion = (motivo) => {
+      if (!activo) return
+
+      if (temporizador) {
+        clearTimeout(temporizador)
+      }
+
+      temporizador = setTimeout(() => {
+        sincronizarDesdeNube(motivo)
+      }, 350)
+    }
+
+    const canal = supabase
+      .channel(`finanzas-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'movimientos',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          programarSincronizacion('cambio en movimientos')
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pagos',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          programarSincronizacion('cambio en pagos')
+        }
+      )
+      .subscribe((estado) => {
+        console.log(
+          '📡 Estado de sincronización en tiempo real:',
+          estado
+        )
+      })
+
+    const sincronizarAlVolver = () => {
+      if (document.visibilityState === 'visible') {
+        programarSincronizacion('app visible')
+      }
+    }
+
+    const sincronizarAlRecuperarFoco = () => {
+      programarSincronizacion('ventana activa')
+    }
+
+    document.addEventListener(
+      'visibilitychange',
+      sincronizarAlVolver
+    )
+
+    window.addEventListener(
+      'focus',
+      sincronizarAlRecuperarFoco
+    )
+
+    return () => {
+      activo = false
+
+      if (temporizador) {
+        clearTimeout(temporizador)
+      }
+
+      document.removeEventListener(
+        'visibilitychange',
+        sincronizarAlVolver
+      )
+
+      window.removeEventListener(
+        'focus',
+        sincronizarAlRecuperarFoco
+      )
+
+      supabase.removeChannel(canal)
+    }
+  }, [sesion])
+
   const iniciarSesion = async (e) => {
     e.preventDefault()
     setErrorLogin('')
