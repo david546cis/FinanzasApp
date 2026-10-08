@@ -24,6 +24,12 @@ function App() {
   const [procesandoCuenta, setProcesandoCuenta] = useState(false)
   const [mensajeCuenta, setMensajeCuenta] = useState('')
   const [errorCuenta, setErrorCuenta] = useState('')
+  const [mostrarEliminarCuenta, setMostrarEliminarCuenta] = useState(false)
+  const [passwordEliminarCuenta, setPasswordEliminarCuenta] = useState('')
+  const [confirmacionEliminarCuenta, setConfirmacionEliminarCuenta] = useState('')
+  const [procesandoEliminacion, setProcesandoEliminacion] = useState(false)
+  const [errorEliminacion, setErrorEliminacion] = useState('')
+
   const [perfilListoPara, setPerfilListoPara] = useState(null)
   const temporizadorPerfilRef = useRef(null)
   const ajustesPendientesRef = useRef(null)
@@ -620,6 +626,78 @@ console.log(
       setErrorCuenta('No pudimos actualizar la contraseña. Inténtalo de nuevo.')
     } finally {
       setProcesandoCuenta(false)
+    }
+  }
+  const eliminarMiCuenta = async (evento) => {
+    evento.preventDefault()
+    if (procesandoEliminacion) return
+    setErrorEliminacion('')
+    if (confirmacionEliminarCuenta.trim() !== 'ELIMINAR MI CUENTA') {
+      setErrorEliminacion('Escribe exactamente ELIMINAR MI CUENTA.')
+      return
+    }
+    const correo = sesion?.user?.email
+    if (!correo || !passwordEliminarCuenta) {
+      setErrorEliminacion('Escribe tu contraseña actual.')
+      return
+    }
+    if (!window.confirm(
+  `ÚLTIMA CONFIRMACIÓN\n\n` +
+  `Cuenta que se eliminará:\n${correo}\n\n` +
+  `Se eliminarán permanentemente su perfil, movimientos, pagos y preferencias.\n\n` +
+  `Esta operación NO se puede deshacer.\n\n` +
+  `¿Deseas continuar?`
+)) return
+    setProcesandoEliminacion(true)
+    try {
+      const { error: errorVerificacion } = await supabase.auth.signInWithPassword({
+        email: correo,
+        password: passwordEliminarCuenta,
+      })
+      if (errorVerificacion) {
+        setErrorEliminacion('No se pudo verificar la contraseña actual.')
+        return
+      }
+      const { data: sesionActual, error: errorSesion } = await supabase.auth.getSession()
+      if (errorSesion || !sesionActual?.session?.access_token) {
+        throw new Error('No hay una sesión válida.')
+      }
+      const { data, error } = await supabase.functions.invoke('eliminar-cuenta', {
+        headers: { Authorization: `Bearer ${sesionActual.session.access_token}` },
+        body: {
+  password: passwordEliminarCuenta,
+  confirmacion: confirmacionEliminarCuenta.trim(),
+},
+      })
+      if (error) {
+  throw error
+}
+
+if (data?.error || data?.mensaje !== 'Cuenta eliminada correctamente.') {
+  throw new Error(
+    data?.error || data?.mensaje || 'Respuesta inesperada del servidor.'
+  )
+}
+      // La función del servidor debe borrar exclusivamente al usuario autenticado.
+      await supabase.auth.signOut({ scope: 'local' })
+      localStorage.removeItem('finanzas_movimientos')
+      localStorage.removeItem('finanzas_pagos')
+      localStorage.removeItem('finanzas_ajustes')
+      localStorage.removeItem(`finanzas_ajustes_${sesionActual.session.user.id}`)
+      setMovimientos([])
+      setPagos([])
+      setAjustes(AJUSTES_BASE)
+      setSesion(null)
+      setMostrarEliminarCuenta(false)
+      setPasswordEliminarCuenta('')
+      setConfirmacionEliminarCuenta('')
+      alert('Solicitud de eliminación completada. Tu sesión se cerró.')
+      window.location.reload()
+    } catch (error) {
+      console.error('Error al eliminar cuenta:', error)
+      setErrorEliminacion('No se pudo completar la eliminación. Tu cuenta no debe considerarse eliminada; revisa los registros de la función en Supabase.')
+    } finally {
+      setProcesandoEliminacion(false)
     }
   }
 
@@ -5140,7 +5218,42 @@ const esMesActual =
           </button>
         </form>
       </div>
-      <p className="nota-ajustes">La eliminación definitiva de cuentas se habilitará cuando configuremos su operación segura en Supabase.</p>
+      <div className="tarjeta-ajustes" style={{ padding: '16px', marginTop: '14px' }}>
+        <strong style={{ color: '#b91c1c' }}>Eliminar mi cuenta</strong>
+        <p style={{ margin: '8px 0', fontSize: '13px' }}>Esta acción es permanente. Se eliminarán tu perfil, movimientos y pagos. Exporta primero un respaldo si deseas conservarlos.</p>
+        {!mostrarEliminarCuenta ? (
+          <div style={{ display: 'grid', gap: '10px' }}>
+          <button type="button" onClick={() => { setMostrarEliminarCuenta(true); setErrorEliminacion('') }}
+            style={{ padding: '10px', border: '1px solid #b91c1c', color: '#b91c1c', borderRadius: '9px', background: 'white' }}>
+            Quiero eliminar mi cuenta
+          </button>
+          </div>
+        ) : (
+          <form onSubmit={eliminarMiCuenta} style={{ display: 'grid', gap: '12px' }}>
+            <label style={{ display: 'grid', gap: '5px' }}>
+              Contraseña actual
+              <input type="password" autoComplete="current-password" required
+                value={passwordEliminarCuenta} onChange={(e) => setPasswordEliminarCuenta(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #d9e0e9', borderRadius: '9px' }} />
+            </label>
+            <label style={{ display: 'grid', gap: '5px' }}>
+              Escribe ELIMINAR MI CUENTA
+              <input type="text" required value={confirmacionEliminarCuenta}
+                onChange={(e) => setConfirmacionEliminarCuenta(e.target.value)}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #d9e0e9', borderRadius: '9px' }} />
+            </label>
+            {errorEliminacion && <p role="alert" style={{ color: '#b91c1c' }}>{errorEliminacion}</p>}
+            <button type="submit" disabled={procesandoEliminacion || confirmacionEliminarCuenta.trim() !== 'ELIMINAR MI CUENTA'}
+              style={{ padding: '12px', background: '#b91c1c', color: 'white', border: 0, borderRadius: '9px', fontWeight: 700 }}>
+              {procesandoEliminacion ? 'Eliminando...' : 'Eliminar definitivamente'}
+            </button>
+            <button type="button" disabled={procesandoEliminacion}
+              onClick={() => { setMostrarEliminarCuenta(false); setPasswordEliminarCuenta(''); setConfirmacionEliminarCuenta(''); setErrorEliminacion('') }}>
+              Cancelar
+            </button>
+          </form>
+        )}
+      </div>
     </div>
 
     {/* ================= PREFERENCIAS ================= */}
