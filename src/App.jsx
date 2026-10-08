@@ -18,6 +18,12 @@ function App() {
   const [modoAuth, setModoAuth] = useState('login')
   const [confirmarPassword, setConfirmarPassword] = useState('')
   const [nombreRegistro, setNombreRegistro] = useState('')
+  const [passwordActualCuenta, setPasswordActualCuenta] = useState('')
+  const [passwordNuevaCuenta, setPasswordNuevaCuenta] = useState('')
+  const [passwordConfirmacionCuenta, setPasswordConfirmacionCuenta] = useState('')
+  const [procesandoCuenta, setProcesandoCuenta] = useState(false)
+  const [mensajeCuenta, setMensajeCuenta] = useState('')
+  const [errorCuenta, setErrorCuenta] = useState('')
   const [perfilListoPara, setPerfilListoPara] = useState(null)
   const temporizadorPerfilRef = useRef(null)
   const ajustesPendientesRef = useRef(null)
@@ -569,6 +575,52 @@ console.log(
     setMensajeAuth('')
     setPasswordLogin('')
     setConfirmarPassword('')
+  }
+
+  const cambiarPasswordCuenta = async (evento) => {
+    evento.preventDefault()
+    if (procesandoCuenta) return
+    setErrorCuenta('')
+    setMensajeCuenta('')
+    const correo = sesion?.user?.email
+    if (!correo || !passwordActualCuenta) {
+      setErrorCuenta('Escribe tu contraseña actual.')
+      return
+    }
+    if (passwordNuevaCuenta.length < 8) {
+      setErrorCuenta('La nueva contraseña debe tener al menos 8 caracteres.')
+      return
+    }
+    if (passwordNuevaCuenta !== passwordConfirmacionCuenta) {
+      setErrorCuenta('Las nuevas contraseñas no coinciden.')
+      return
+    }
+    if (passwordActualCuenta === passwordNuevaCuenta) {
+      setErrorCuenta('Elige una contraseña distinta de la actual.')
+      return
+    }
+    setProcesandoCuenta(true)
+    try {
+      const { error: errorVerificacion } = await supabase.auth.signInWithPassword({
+        email: correo,
+        password: passwordActualCuenta,
+      })
+      if (errorVerificacion) {
+        setErrorCuenta('La contraseña actual es incorrecta o no se pudo verificar.')
+        return
+      }
+      const { error } = await supabase.auth.updateUser({ password: passwordNuevaCuenta })
+      if (error) throw error
+      setPasswordActualCuenta('')
+      setPasswordNuevaCuenta('')
+      setPasswordConfirmacionCuenta('')
+      setMensajeCuenta('Contraseña actualizada correctamente.')
+    } catch (error) {
+      console.error('Error al actualizar contraseña:', error)
+      setErrorCuenta('No pudimos actualizar la contraseña. Inténtalo de nuevo.')
+    } finally {
+      setProcesandoCuenta(false)
+    }
   }
 
   const cerrarSesion = async () => {
@@ -5047,6 +5099,48 @@ const esMesActual =
           </div>
         </div>
       </div>
+    </div>
+
+    {/* ================= MI CUENTA ================= */}
+    <div className="grupo-ajustes">
+      <h3>Mi cuenta</h3>
+      <div className="tarjeta-ajustes" style={{ padding: '16px' }}>
+        <div style={{ marginBottom: '16px' }}>
+          <strong style={{ display: 'block', marginBottom: '5px' }}>Correo de acceso</strong>
+          <span style={{ overflowWrap: 'anywhere' }}>{sesion?.user?.email || 'Sin correo'}</span>
+        </div>
+        <form onSubmit={cambiarPasswordCuenta} style={{ display: 'grid', gap: '12px' }}>
+          <strong>Cambiar contraseña</strong>
+          <label style={{ display: 'grid', gap: '5px' }}>
+            Contraseña actual
+            <input type="password" autoComplete="current-password" required
+              value={passwordActualCuenta}
+              onChange={(e) => setPasswordActualCuenta(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #d9e0e9', borderRadius: '9px' }} />
+          </label>
+          <label style={{ display: 'grid', gap: '5px' }}>
+            Nueva contraseña (mínimo 8 caracteres)
+            <input type="password" autoComplete="new-password" minLength={8} required
+              value={passwordNuevaCuenta}
+              onChange={(e) => setPasswordNuevaCuenta(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #d9e0e9', borderRadius: '9px' }} />
+          </label>
+          <label style={{ display: 'grid', gap: '5px' }}>
+            Confirmar nueva contraseña
+            <input type="password" autoComplete="new-password" required
+              value={passwordConfirmacionCuenta}
+              onChange={(e) => setPasswordConfirmacionCuenta(e.target.value)}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '10px', border: '1px solid #d9e0e9', borderRadius: '9px' }} />
+          </label>
+          {errorCuenta && <p role="alert" style={{ color: '#b91c1c' }}>{errorCuenta}</p>}
+          {mensajeCuenta && <p role="status" style={{ color: '#047857' }}>{mensajeCuenta}</p>}
+          <button type="submit" disabled={procesandoCuenta}
+            style={{ padding: '12px', border: 0, borderRadius: '9px', background: '#2563eb', color: 'white', fontWeight: 700, cursor: 'pointer' }}>
+            {procesandoCuenta ? 'Actualizando...' : 'Actualizar contraseña'}
+          </button>
+        </form>
+      </div>
+      <p className="nota-ajustes">La eliminación definitiva de cuentas se habilitará cuando configuremos su operación segura en Supabase.</p>
     </div>
 
     {/* ================= PREFERENCIAS ================= */}
