@@ -578,6 +578,7 @@ console.log(
   const [pantalla, setPantalla] = useState('inicio')
   const inputRespaldoRef = useRef(null)
   const [filtroPagos, setFiltroPagos] = useState('pendientes')
+  const [busquedaPago, setBusquedaPago] = useState('')
   const [pagoPorConfirmar, setPagoPorConfirmar] = useState(null)
   const [vistaPreviaExcel, setVistaPreviaExcel] = useState(null)
   const inputExcelRef = useRef(null)
@@ -3395,6 +3396,67 @@ const confirmarPago = async () => {
           `${b.fechaVencimiento}T12:00:00`
         )
     )
+
+  // =========================================================
+  // BÚSQUEDA RÁPIDA DE PAGOS
+  // =========================================================
+
+  const coincideBusquedaPago = (pago) => {
+    const busqueda = busquedaPago
+      .trim()
+      .toLowerCase()
+
+    if (!busqueda) return true
+
+    const concepto = String(
+      pago.concepto || ''
+    ).toLowerCase()
+
+    const categoria = String(
+      nombreCategoria(pago.categoria) || ''
+    ).toLowerCase()
+
+    const metodo = String(
+      nombreMetodoPago(pago.metodoPago) || ''
+    ).toLowerCase()
+
+    const modalidad = String(
+      pago.modalidad || ''
+    ).toLowerCase()
+
+    return (
+      concepto.includes(busqueda) ||
+      categoria.includes(busqueda) ||
+      metodo.includes(busqueda) ||
+      modalidad.includes(busqueda)
+    )
+  }
+
+  const pagosPendientesFiltrados =
+    pagosPendientes.filter(coincideBusquedaPago)
+
+  const pagosPagadosFiltrados = pagos
+    .filter((pago) => pago.estado === 'pagado')
+    .filter(coincideBusquedaPago)
+    .sort(
+      (a, b) =>
+        new Date(b.fechaPago) -
+        new Date(a.fechaPago)
+    )
+
+  const pagosPausadosFiltrados = pagos
+    .filter((pago) => pago.estado === 'pausado')
+    .filter(coincideBusquedaPago)
+    .sort((a, b) =>
+      String(a.concepto).localeCompare(
+        String(b.concepto),
+        'es'
+      )
+    )
+
+  const pagosCanceladosFiltrados = pagos
+    .filter((pago) => pago.estado === 'cancelado')
+    .filter(coincideBusquedaPago)
     // =========================================================
 // PAGOS URGENTES Y PRÓXIMOS 7 DÍAS
 // =========================================================
@@ -4108,7 +4170,7 @@ const esMesActual =
             </button>
           </div>
 
-          {pagosPendientes.length === 0 ? (
+          {pagosPendientesFiltrados.length === 0 ? (
             <div className="sin-pagos">
               <div className="icono-calendario">
                 📅
@@ -4250,6 +4312,29 @@ const esMesActual =
             </div>
           </div>
 
+<div className="buscador-movimientos">
+  <span>⌕</span>
+
+  <input
+    type="text"
+    value={busquedaPago}
+    onChange={(e) =>
+      setBusquedaPago(e.target.value)
+    }
+    placeholder="Buscar pago..."
+  />
+
+  {busquedaPago && (
+    <button
+      type="button"
+      onClick={() => setBusquedaPago('')}
+      aria-label="Limpiar búsqueda de pagos"
+    >
+      ×
+    </button>
+  )}
+</div>
+
 <div className="filtros-pagos">
   <button
     className={
@@ -4312,15 +4397,21 @@ const esMesActual =
                     📅
                   </div>
 
-                  <h4>No tienes pagos pendientes</h4>
+                  <h4>
+                    {busquedaPago
+                      ? 'No encontramos pagos pendientes'
+                      : 'No tienes pagos pendientes'}
+                  </h4>
 
                   <p>
-                    Tus compromisos futuros aparecerán aquí.
+                    {busquedaPago
+                      ? 'Prueba con otro concepto, categoría o método de pago.'
+                      : 'Tus compromisos futuros aparecerán aquí.'}
                   </p>
                 </div>
               ) : (
                 <div className="lista-pagos-completa">
-                  {pagosPendientes.map((pago) => (
+                  {pagosPendientesFiltrados.map((pago) => (
                     <div
   className="tarjeta-pago-completa"
   key={pago.id}
@@ -4417,9 +4508,7 @@ const esMesActual =
             </>
                   ) : filtroPagos === 'pagados' ? (
             <div className="lista-pagos-completa">
-              {pagos.filter(
-                (pago) => pago.estado === 'pagado'
-              ).length === 0 ? (
+              {pagosPagadosFiltrados.length === 0 ? (
                 <div className="sin-pagos">
                   <div className="icono-calendario">
                     ✓
@@ -4435,16 +4524,7 @@ const esMesActual =
                   </p>
                 </div>
               ) : (
-                pagos
-                  .filter(
-                    (pago) => pago.estado === 'pagado'
-                  )
-                  .sort(
-                    (a, b) =>
-                      new Date(b.fechaPago) -
-                      new Date(a.fechaPago)
-                  )
-                  .map((pago) => (
+                pagosPagadosFiltrados.map((pago) => (
                     <div
                       className="tarjeta-pago-completa pago-realizado"
                       key={pago.id}
@@ -4487,9 +4567,7 @@ const esMesActual =
             </div>
           ) : filtroPagos === 'pausados' ? (
             <div className="lista-pagos-completa">
-              {pagos.filter(
-                (pago) => pago.estado === 'pausado'
-              ).length === 0 ? (
+              {pagosPausadosFiltrados.length === 0 ? (
                 <div className="sin-pagos">
                   <div className="icono-calendario">
                     Ⅱ
@@ -4502,17 +4580,7 @@ const esMesActual =
                   </p>
                 </div>
               ) : (
-                pagos
-                  .filter(
-                    (pago) => pago.estado === 'pausado'
-                  )
-                  .sort((a, b) =>
-                    String(a.concepto).localeCompare(
-                      String(b.concepto),
-                      'es'
-                    )
-                  )
-                  .map((pago) => (
+                pagosPausadosFiltrados.map((pago) => (
                     <div
                       className="tarjeta-pago-completa"
                       key={pago.id}
@@ -4549,10 +4617,7 @@ const esMesActual =
             </div>
           ) : (
   <div className="lista-pagos-completa">
-    {pagos.filter(
-      (pago) =>
-        pago.estado === 'cancelado'
-    ).length === 0 ? (
+    {pagosCanceladosFiltrados.length === 0 ? (
       <div className="sin-pagos">
         <div className="icono-calendario">
           ⊘
@@ -4569,11 +4634,7 @@ const esMesActual =
         </p>
       </div>
     ) : (
-      pagos
-        .filter(
-          (pago) =>
-            pago.estado === 'cancelado'
-        )
+      pagosCanceladosFiltrados
         .sort(
           (a, b) =>
             new Date(
