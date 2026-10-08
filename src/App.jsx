@@ -17,6 +17,10 @@ function App() {
   const [procesandoLogin, setProcesandoLogin] = useState(false)
   const [modoAuth, setModoAuth] = useState('login')
   const [confirmarPassword, setConfirmarPassword] = useState('')
+  const [nombreRegistro, setNombreRegistro] = useState('')
+  const [perfilListoPara, setPerfilListoPara] = useState(null)
+  const temporizadorPerfilRef = useRef(null)
+  const ajustesPendientesRef = useRef(null)
 
   useEffect(() => {
     let activo = true
@@ -441,6 +445,12 @@ console.log(
     setMensajeAuth('')
 
     const correo = correoLogin.trim()
+    const nombre = nombreRegistro.trim()
+
+    if (!nombre) {
+      setErrorLogin('Escribe tu nombre para crear la cuenta.')
+      return
+    }
 
     if (!correo || !passwordLogin) {
       setErrorLogin('Escribe tu correo y contraseña.')
@@ -463,6 +473,7 @@ console.log(
       email: correo,
       password: passwordLogin,
       options: {
+        data: { nombre },
         emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`,
       },
     })
@@ -476,6 +487,7 @@ console.log(
 
     setPasswordLogin('')
     setConfirmarPassword('')
+    setNombreRegistro('')
 
     if (data.session) {
       setMensajeAuth('Cuenta creada correctamente.')
@@ -605,33 +617,81 @@ const [formularioEdicion, setFormularioEdicion] =
 // AJUSTES
 // =========================================================
 
-const [ajustes, setAjustes] = useState(() => {
-  const guardados = localStorage.getItem('finanzas_ajustes')
+const AJUSTES_BASE = {
+  nombre: '',
+  moneda: 'MXN',
+  formatoFecha: 'dd/mm/aaaa',
+  recordatorios: true,
+  diasAnticipacion: 3,
+  recordarVencimiento: true,
+}
+const [ajustes, setAjustes] = useState(AJUSTES_BASE)
 
-  try {
-    return guardados
-      ? JSON.parse(guardados)
-      : {
-          nombre: 'David',
-          moneda: 'MXN',
-          formatoFecha: 'dd/mm/aaaa',
+// Cada cuenta recibe su perfil de Supabase; no se reutilizan los ajustes
+// de otra cuenta que haya iniciado sesión en el mismo navegador.
+useEffect(() => {
+  const userId = sesion?.user?.id
+  if (temporizadorPerfilRef.current) clearTimeout(temporizadorPerfilRef.current)
+  ajustesPendientesRef.current = null
+  setPerfilListoPara(null)
+  setAjustes(AJUSTES_BASE)
+  if (!userId) return
 
-          recordatorios: true,
-          diasAnticipacion: 3,
-          recordarVencimiento: true,
-        }
-  } catch {
-    return {
-      nombre: 'David',
-      moneda: 'MXN',
-      formatoFecha: 'dd/mm/aaaa',
-
-      recordatorios: true,
-      diasAnticipacion: 3,
-      recordarVencimiento: true,
+  let activo = true
+  const leerPerfil = async () => {
+    const { data, error } = await supabase
+      .from('perfiles')
+      .select('nombre, moneda, formato_fecha, dias_anticipacion, recordar_vencimiento, recordatorios')
+      .eq('id', userId)
+      .single()
+    if (!activo) return
+    if (error) {
+      console.error('No se pudo cargar el perfil:', error)
+      // No habilitar la edición si la carga falló: evitar sobreescribir
+      // las preferencias existentes con valores predeterminados.
+      return
     }
+    // En el primer inicio tras confirmar el correo, aplicar el nombre
+    // elegido en el registro si el trigger usó el prefijo del correo.
+    const nombreElegido = sesion?.user?.user_metadata?.nombre?.trim()
+    const prefijoCorreo = sesion?.user?.email?.split('@')[0]
+    if (nombreElegido && (!data.nombre || data.nombre === prefijoCorreo)) {
+      const { error: errorNombre } = await supabase.from('perfiles')
+        .update({ nombre: nombreElegido }).eq('id', userId)
+      if (!errorNombre) data.nombre = nombreElegido
+    }
+    if (!activo) return
+    setAjustes({
+      nombre: data.nombre || '',
+      moneda: data.moneda || 'MXN',
+      formatoFecha: data.formato_fecha === 'AAAA-MM-DD' || data.formato_fecha === 'aaaa-mm-dd'
+        ? 'aaaa-mm-dd' : 'dd/mm/aaaa',
+      recordatorios: data.recordatorios ?? true,
+      diasAnticipacion: Number(data.dias_anticipacion ?? 3),
+      recordarVencimiento: data.recordar_vencimiento ?? true,
+    })
+    setPerfilListoPara(userId)
   }
-})
+  leerPerfil()
+
+  // Refresca ajustes al volver a abrir la aplicación, incluso si el móvil
+  // suspendió la conexión Realtime mientras estaba en segundo plano.
+  const alVolver = () => {
+    if (document.visibilityState === 'visible' && !ajustesPendientesRef.current) leerPerfil()
+  }
+  document.addEventListener('visibilitychange', alVolver)
+  const canalPerfil = supabase.channel(`perfil-${userId}`)
+    .on('postgres_changes', {
+      event: 'UPDATE', schema: 'public', table: 'perfiles', filter: `id=eq.${userId}`,
+    }, () => { if (!ajustesPendientesRef.current) leerPerfil() })
+    .subscribe()
+  return () => {
+    activo = false
+    document.removeEventListener('visibilitychange', alVolver)
+    supabase.removeChannel(canalPerfil)
+  }
+}, [sesion?.user?.id])
+
   const [mesMovimientos, setMesMovimientos] = useState(() => {
   const hoy = new Date()
 
@@ -738,12 +798,12 @@ const [formularioEdicionPago, setFormularioEdicionPago] =
       JSON.stringify(pagos)
     )
   }, [pagos])
+  // Caché por usuario; la fuente de verdad de Ajustes es Supabase.
   useEffect(() => {
-  localStorage.setItem(
-    'finanzas_ajustes',
-    JSON.stringify(ajustes)
-  )
-}, [ajustes])
+    if (sesion?.user?.id && perfilListoPara === sesion.user.id) {
+      localStorage.setItem(`finanzas_ajustes_${sesion.user.id}`, JSON.stringify(ajustes))
+    }
+  }, [ajustes, perfilListoPara, sesion?.user?.id])
 
   // =========================================================
   // FORMATO DE DINERO
@@ -1064,10 +1124,31 @@ const nombreMetodoPago = (metodo) => {
 // =========================================================
 
 const cambiarAjuste = (campo, valor) => {
-  setAjustes((anteriores) => ({
-    ...anteriores,
-    [campo]: valor,
-  }))
+  const userId = sesion?.user?.id
+  if (!userId || perfilListoPara !== userId) return
+  const siguientes = { ...ajustes, [campo]: valor }
+  setAjustes(siguientes)
+  ajustesPendientesRef.current = siguientes
+  if (temporizadorPerfilRef.current) clearTimeout(temporizadorPerfilRef.current)
+  temporizadorPerfilRef.current = setTimeout(async () => {
+    const guardar = ajustesPendientesRef.current
+    if (!guardar) return
+    const { error } = await supabase.from('perfiles').update({
+      nombre: guardar.nombre.trim() || 'Usuario',
+      moneda: guardar.moneda,
+      formato_fecha: guardar.formatoFecha === 'aaaa-mm-dd' ? 'AAAA-MM-DD' : 'DD/MM/YYYY',
+      recordatorios: guardar.recordatorios,
+      dias_anticipacion: guardar.diasAnticipacion,
+      recordar_vencimiento: guardar.recordarVencimiento,
+    }).eq('id', userId)
+    if (error) {
+      console.error('Error al guardar preferencias:', error)
+      alert('No pudimos guardar los ajustes en la nube. Verifica tu conexión y vuelve a modificarlos.')
+    } else if (ajustesPendientesRef.current === guardar) {
+      ajustesPendientesRef.current = null
+      console.log('☁️ Preferencias guardadas en Supabase.')
+    }
+  }, 650)
 }
 
 // =========================================================
@@ -3745,6 +3826,16 @@ const esMesActual =
             </p>
           </div>
 
+          {esRegistro && (
+            <div className="campo">
+              <label>Tu nombre</label>
+              <input type="text" value={nombreRegistro}
+                onChange={(e) => setNombreRegistro(e.target.value)}
+                autoComplete="name" placeholder="¿Cómo te llamas?"
+                maxLength={80} required />
+            </div>
+          )}
+
           {!esNuevaPassword && (
             <div className="campo">
               <label>Correo electrónico</label>
@@ -4928,6 +5019,7 @@ const esMesActual =
     {/* ================= MI PERFIL ================= */}
 
     <div className="grupo-ajustes">
+      {perfilListoPara !== sesion?.user?.id && <p role="status">Cargando preferencias de tu cuenta…</p>}
       <h3>Mi perfil</h3>
 
       <div className="tarjeta-ajustes">
