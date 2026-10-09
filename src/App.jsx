@@ -3,6 +3,12 @@ import * as XLSX from 'xlsx'
 import './App.css'
 import { supabase } from './lib/supabase.js'
 
+import {
+  activarNotificacionesPush,
+  desactivarNotificacionesPush,
+  consultarEstadoPush,
+} from './lib/pushNotifications.js'
+
 function App() {
   // =========================================================
   // AUTENTICACIÓN CON SUPABASE
@@ -701,14 +707,29 @@ if (data?.error || data?.mensaje !== 'Cuenta eliminada correctamente.') {
     }
   }
 
-  const cerrarSesion = async () => {
-    const { error } = await supabase.auth.signOut()
-
-    if (error) {
-      console.error('Error al cerrar sesión:', error)
-      alert('No pudimos cerrar la sesión. Inténtalo nuevamente.')
-    }
+ const cerrarSesion = async () => {
+  try {
+    // Eliminar la suscripción push antes de cerrar sesión.
+    // Así evitamos avisos de una cuenta anterior en este dispositivo.
+    await desactivarNotificacionesPush()
+    setPushActivo(false)
+    setMensajePush('')
+  } catch (error) {
+    console.error('No se pudieron desactivar las notificaciones:', error)
+    alert(
+      'No pudimos desvincular las notificaciones de este dispositivo. ' +
+      'Inténtalo nuevamente antes de cerrar sesión.'
+    )
+    return
   }
+
+  const { error } = await supabase.auth.signOut()
+
+  if (error) {
+    console.error('Error al cerrar sesión:', error)
+    alert('No pudimos cerrar la sesión. Inténtalo nuevamente.')
+  }
+}
 
   // =========================================================
   // ESTADOS GENERALES
@@ -756,6 +777,55 @@ const AJUSTES_BASE = {
   recordarVencimiento: true,
 }
 const [ajustes, setAjustes] = useState(AJUSTES_BASE)
+// =========================================================
+// NOTIFICACIONES PUSH
+// =========================================================
+
+const [procesandoPush, setProcesandoPush] = useState(false)
+const [mensajePush, setMensajePush] = useState('')
+const [pushActivo, setPushActivo] = useState(false)
+useEffect(() => {
+  let activo = true
+
+  setPushActivo(false)
+
+  if (!sesion?.user?.id) return
+
+  consultarEstadoPush()
+    .then((habilitado) => {
+      if (activo) setPushActivo(habilitado)
+    })
+    .catch((error) => {
+      console.error('Error consultando notificaciones:', error)
+    })
+
+  return () => {
+    activo = false
+  }
+}, [sesion?.user?.id])
+const cambiarEstadoPush = async () => {
+  if (procesandoPush) return
+
+  setProcesandoPush(true)
+  setMensajePush('')
+
+  try {
+    if (pushActivo) {
+      await desactivarNotificacionesPush()
+      setPushActivo(false)
+      setMensajePush('Notificaciones desactivadas en este dispositivo.')
+    } else {
+      await activarNotificacionesPush()
+      setPushActivo(true)
+      setMensajePush('Dispositivo registrado correctamente.')
+    }
+  } catch (error) {
+    console.error('Error en notificaciones push:', error)
+    setMensajePush(error.message || 'No se pudo cambiar la configuración.')
+  } finally {
+    setProcesandoPush(false)
+  }
+}
 
 // Cada cuenta recibe su perfil de Supabase; no se reutilizan los ajustes
 // de otra cuenta que haya iniciado sesión en el mismo navegador.
@@ -5354,6 +5424,34 @@ const esMesActual =
         {ajustes.recordatorios && (
           <>
             <div className="separador-ajuste" />
+            
+<div className="fila-ajuste">
+  <div>
+    <strong>Notificaciones en este dispositivo</strong>
+    <span>
+      Recibe avisos de tus pagos aunque FinanzasApp esté cerrada.
+    </span>
+  </div>
+
+  <button
+    type="button"
+    disabled={procesandoPush || !ajustes.recordatorios}
+    onClick={cambiarEstadoPush}
+  >
+    {procesandoPush
+      ? 'Procesando...'
+      : pushActivo
+        ? 'Desactivar'
+        : 'Activar'}
+  </button>
+</div>
+
+{mensajePush && (
+  <p className="nota-ajustes" role="status">
+    {mensajePush}
+  </p>
+)}
+<div className="separador-ajuste" />
 
             <div className="fila-ajuste">
               <div>

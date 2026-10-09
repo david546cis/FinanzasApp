@@ -7,10 +7,12 @@ export default defineConfig({
 
   plugins: [
     react(),
-
+    
     VitePWA({
       registerType: 'autoUpdate',
-
+        strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       includeAssets: [
         'favicon.ico',
         'apple-touch-icon.png',
@@ -50,11 +52,11 @@ export default defineConfig({
         ],
       },
 
-      workbox: {
-        globPatterns: [
-          '**/*.{js,css,html,ico,png,svg}',
-        ],
-      },
+injectManifest: {
+  globPatterns: [
+    '**/*.{js,css,html,ico,png,svg}',
+  ],
+},
 
       devOptions: {
         enabled: true,
