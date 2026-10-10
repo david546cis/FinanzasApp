@@ -775,6 +775,7 @@ const AJUSTES_BASE = {
   recordatorios: true,
   diasAnticipacion: 3,
   recordarVencimiento: true,
+  horaRecordatorio: '08:00',
 }
 const [ajustes, setAjustes] = useState(AJUSTES_BASE)
 // =========================================================
@@ -784,6 +785,37 @@ const [ajustes, setAjustes] = useState(AJUSTES_BASE)
 const [procesandoPush, setProcesandoPush] = useState(false)
 const [mensajePush, setMensajePush] = useState('')
 const [pushActivo, setPushActivo] = useState(false)
+const [probandoNotificacion, setProbandoNotificacion] = useState(false)
+
+// Prueba visual local: no envía un push desde Supabase,
+// no modifica pagos ni consume la reserva diaria.
+const probarNotificacionLocal = async () => {
+  if (probandoNotificacion) return
+  setProbandoNotificacion(true)
+  setMensajePush('')
+  try {
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+      throw new Error('Este navegador no admite notificaciones de la aplicación.')
+    }
+    if (Notification.permission !== 'granted') {
+      throw new Error('Primero activa y autoriza las notificaciones en este dispositivo.')
+    }
+    const registro = await navigator.serviceWorker.ready
+    await registro.showNotification('FinanzasApp · Prueba 🔔', {
+      body: 'Esta es una prueba visual. Tus pagos y recordatorios no se modificaron.',
+      icon: `${import.meta.env.BASE_URL}pwa-192x192.png`,
+      tag: `finanzas-prueba-visual-${Date.now()}`,
+      data: { url: import.meta.env.BASE_URL },
+    })
+    setMensajePush('Notificación de prueba solicitada a Android. El sonido depende de los ajustes del teléfono.')
+  } catch (error) {
+    console.error('Error en prueba de notificación:', error)
+    setMensajePush(error?.message || 'No se pudo mostrar la notificación de prueba.')
+  } finally {
+    setProbandoNotificacion(false)
+  }
+}
+
 useEffect(() => {
   let activo = true
 
@@ -841,7 +873,7 @@ useEffect(() => {
   const leerPerfil = async () => {
     const { data, error } = await supabase
       .from('perfiles')
-      .select('nombre, moneda, formato_fecha, dias_anticipacion, recordar_vencimiento, recordatorios')
+      .select('nombre, moneda, formato_fecha, dias_anticipacion, recordar_vencimiento, recordatorios, hora_recordatorio')
       .eq('id', userId)
       .single()
     if (!activo) return
@@ -869,6 +901,7 @@ useEffect(() => {
       recordatorios: data.recordatorios ?? true,
       diasAnticipacion: Number(data.dias_anticipacion ?? 3),
       recordarVencimiento: data.recordar_vencimiento ?? true,
+      horaRecordatorio: String(data.hora_recordatorio || '08:00').slice(0, 5),
     })
     setPerfilListoPara(userId)
   }
@@ -1340,6 +1373,7 @@ const cambiarAjuste = (campo, valor) => {
       recordatorios: guardar.recordatorios,
       dias_anticipacion: guardar.diasAnticipacion,
       recordar_vencimiento: guardar.recordarVencimiento,
+      hora_recordatorio: `${guardar.horaRecordatorio || '08:00'}:00`,
     }).eq('id', userId)
     if (error) {
       console.error('Error al guardar preferencias:', error)
@@ -5446,6 +5480,20 @@ const esMesActual =
   </button>
 </div>
 
+<div className="fila-ajuste">
+  <div>
+    <strong>Probar notificación en este teléfono</strong>
+    <span>Prueba visual local, sin alterar pagos ni registros del servidor.</span>
+  </div>
+  <button
+    type="button"
+    disabled={!pushActivo || procesandoPush || probandoNotificacion}
+    onClick={probarNotificacionLocal}
+  >
+    {probandoNotificacion ? 'Probando...' : 'Probar aviso'}
+  </button>
+</div>
+
 {mensajePush && (
   <p className="nota-ajustes" role="status">
     {mensajePush}
@@ -5499,6 +5547,26 @@ const esMesActual =
 
             <div className="fila-ajuste">
               <div>
+                <strong>Hora de mis recordatorios</strong>
+                <span>Hora de Ciudad de México. Se revisa cada 5 minutos.</span>
+              </div>
+              <input
+                type="time"
+                step="300"
+                value={ajustes.horaRecordatorio || '08:00'}
+                onChange={(e) => {
+                  if (e.target.value) cambiarAjuste('horaRecordatorio', e.target.value)
+                }}
+                disabled={perfilListoPara !== sesion?.user?.id}
+                aria-label="Hora de mis recordatorios"
+                style={{ maxWidth: '150px', padding: '8px', borderRadius: '8px' }}
+              />
+            </div>
+
+            <div className="separador-ajuste" />
+
+            <div className="fila-ajuste">
+              <div>
                 <strong>
                   Avisar el día del pago
                 </strong>
@@ -5530,9 +5598,9 @@ const esMesActual =
       </div>
 
       <p className="nota-ajustes">
-        Estas preferencias quedarán guardadas.
-        Las notificaciones reales se activarán
-        cuando preparemos la aplicación como PWA.
+        Tus preferencias se guardan en tu cuenta. Recibirás como máximo
+        un aviso agrupado al día, en tu horario, si hay pagos que notificar.
+        El sonido depende de la configuración de Android.
       </p>
     </div>
 
