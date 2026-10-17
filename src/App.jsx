@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import './App.css'
 import { supabase } from './lib/supabase.js'
+import EspacioCompartido from './EspacioCompartido.jsx'
+import MetasAhorro from './MetasAhorro.jsx'
 
 import {
   activarNotificacionesPush,
@@ -739,8 +741,28 @@ if (data?.error || data?.mensaje !== 'Cuenta eliminada correctamente.') {
   const [mostrarFormularioPago, setMostrarFormularioPago] =
     useState(false)
   const [pantalla, setPantalla] = useState('inicio')
+  const [tieneEspacioCompartido, setTieneEspacioCompartido] = useState(false)
+
+  useEffect(() => {
+    const userId = sesion?.user?.id
+    if (!userId) { setTieneEspacioCompartido(false); return }
+    let activo = true
+    const revisar = async () => {
+      const { data, error } = await supabase.from('espacios_integrantes')
+        .select('espacio_id').eq('user_id', userId).limit(1)
+      if (activo && !error) setTieneEspacioCompartido((data || []).length > 0)
+    }
+    revisar()
+    const alVolver = () => { if (document.visibilityState === 'visible') revisar() }
+    document.addEventListener('visibilitychange', alVolver)
+    return () => { activo = false; document.removeEventListener('visibilitychange', alVolver) }
+  }, [sesion?.user?.id])
+  useEffect(() => {
+    if (!tieneEspacioCompartido && pantalla === 'compartido') setPantalla('ajustes')
+  }, [tieneEspacioCompartido, pantalla])
   const inputRespaldoRef = useRef(null)
   const [filtroPagos, setFiltroPagos] = useState('pendientes')
+  const [periodoCompromisos, setPeriodoCompromisos] = useState(15)
   const [busquedaPago, setBusquedaPago] = useState('')
   const [pagoPorConfirmar, setPagoPorConfirmar] = useState(null)
   const [vistaPreviaExcel, setVistaPreviaExcel] = useState(null)
@@ -3681,22 +3703,26 @@ const confirmarPago = async () => {
   // Dinero que actualmente tenemos.
   const balance = ingresos - gastos
 
-  // Sólo los pagos que todavía no han salido,
-  // pero que ya tenemos comprometidos.
+  // Reservar solamente vencimientos próximos, más los atrasados.
+  // No sumar el saldo completo de préstamos ni mensualidades futuras.
+  const hoyCompromisos = new Date()
+  hoyCompromisos.setHours(0, 0, 0, 0)
+  const limiteCompromisos = new Date(hoyCompromisos)
+  limiteCompromisos.setDate(limiteCompromisos.getDate() + periodoCompromisos)
+  const fechaLimiteCompromisos = [
+    limiteCompromisos.getFullYear(),
+    String(limiteCompromisos.getMonth() + 1).padStart(2, '0'),
+    String(limiteCompromisos.getDate()).padStart(2, '0'),
+  ].join('-')
   const comprometido = pagos
-    .filter(
-      (pago) => pago.estado === 'pendiente'
+    .filter((pago) =>
+      pago.estado === 'pendiente' &&
+      pago.fechaVencimiento &&
+      pago.fechaVencimiento <= fechaLimiteCompromisos
     )
-    .reduce(
-      (total, pago) =>
-        total + Number(pago.monto),
-      0
-    )
+    .reduce((total, pago) => total + Number(pago.monto), 0)
 
-  // Este es el número importante:
-  // cuánto dinero realmente podemos considerar libre.
-  const disponibleReal =
-    balance - comprometido
+  const disponibleReal = balance - comprometido
 
   const pagosPendientes = pagos
     .filter(
@@ -4242,12 +4268,25 @@ const esMesActual =
       </header>
 
       <main>
+        {pantalla === 'metas-personales' && <MetasAhorro userId={sesion.user.id} onVolver={() => setPantalla('inicio')} />}
+        {pantalla === 'compartido' && tieneEspacioCompartido && <EspacioCompartido userId={sesion.user.id} onMembershipChange={setTieneEspacioCompartido} />}
+        {pantalla === 'administrar-compartido' && <EspacioCompartido userId={sesion.user.id} managementOnly onMembershipChange={setTieneEspacioCompartido} />}
         {pantalla === 'inicio' && (
           <>
         {/* ================= BALANCE ================= */}
 
         <section className="balance">
           <p>Disponible realmente</p>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }} aria-label="Periodo de compromisos">
+            {[[7, '7 días'], [15, '15 días'], [30, '30 días']].map(([dias, etiqueta]) => (
+              <button key={dias} type="button" onClick={() => setPeriodoCompromisos(dias)}
+                aria-pressed={periodoCompromisos === dias}
+                style={{ border: '1px solid #cbd5e1', borderRadius: 8, padding: '6px 10px',
+                  background: periodoCompromisos === dias ? '#dbeafe' : '#fff', color: '#17365d', cursor: 'pointer' }}>
+                {etiqueta}
+              </button>
+            ))}
+          </div>
 
           <h2>
             {formatoDinero(disponibleReal)}
@@ -4263,7 +4302,7 @@ const esMesActual =
             </div>
 
             <div>
-              <span>Comprometido</span>
+              <span>Comprometido (vencidos + próximos {periodoCompromisos} días)</span>
 
               <strong>
                 {formatoDinero(comprometido)}
@@ -4413,7 +4452,11 @@ const esMesActual =
 
 {ajustes.recordatorios &&
   pagosConAviso.length > 0 && (
-    <section className="aviso-pagos">
+    <section className="aviso-pagos" role="button" tabIndex={0}
+      style={{ cursor: 'pointer' }}
+      onClick={() => { setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') } }}
+      title="Ver pagos que requieren atención">
       <div className="aviso-pagos-icono">
         !
       </div>
@@ -4432,13 +4475,18 @@ const esMesActual =
             ? 'Tienes 1 pago dentro de tu periodo de aviso.'
             : `Tienes ${pagosConAviso.length} pagos dentro de tu periodo de aviso.`}
         </p>
+        <small>Ver pagos y marcarlos como pagados →</small>
       </div>
     </section>
   )}
 
         {/* ================= PRÓXIMOS 7 DÍAS ================= */}
 
-<section className="resumen-vencimientos">
+<section className="resumen-vencimientos" role="button" tabIndex={0}
+  style={{ cursor: 'pointer' }}
+  onClick={() => { setBusquedaPago(''); setFiltroPagos('proximos'); setPantalla('pagos') }}
+  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBusquedaPago(''); setFiltroPagos('proximos'); setPantalla('pagos') } }}
+  title="Ver pagos próximos">
   <div className="cabecera-vencimientos">
     <div>
       <span>Próximos 7 días</span>
@@ -4462,7 +4510,9 @@ const esMesActual =
   </p>
 
   {pagosVencidos.length > 0 && (
-    <div className="alerta-vencidos">
+    <div className="alerta-vencidos" role="button" tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); setBusquedaPago(''); setFiltroPagos('vencidos'); setPantalla('pagos') }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); setBusquedaPago(''); setFiltroPagos('vencidos'); setPantalla('pagos') } }}>
       <div>
         <span>!</span>
       </div>
@@ -4661,6 +4711,10 @@ const esMesActual =
 </div>
 
 <div className="filtros-pagos">
+  {[["avisos", "Avisos"], ["proximos", "7 días"], ["vencidos", "Vencidos"]].map(([valor, etiqueta]) => (
+    <button key={valor} className={filtroPagos === valor ? 'filtro-activo' : ''}
+      onClick={() => setFiltroPagos(valor)}>{etiqueta}</button>
+  ))}
   <button
     className={
       filtroPagos === 'pendientes'
@@ -4714,9 +4768,12 @@ const esMesActual =
   </button>
 </div>
 
-          {filtroPagos === 'pendientes' ? (
+          {['pendientes', 'avisos', 'proximos', 'vencidos'].includes(filtroPagos) ? (
             <>
-              {pagosPendientes.length === 0 ? (
+              {(filtroPagos === 'avisos' ? pagosConAviso
+                : filtroPagos === 'proximos' ? pagosProximos7Dias
+                : filtroPagos === 'vencidos' ? pagosVencidos
+                : pagosPendientes).filter(coincideBusquedaPago).length === 0 ? (
                 <div className="sin-pagos">
                   <div className="icono-calendario">
                     📅
@@ -4736,7 +4793,10 @@ const esMesActual =
                 </div>
               ) : (
                 <div className="lista-pagos-completa">
-                  {pagosPendientesFiltrados.map((pago) => (
+                  {(filtroPagos === 'avisos' ? pagosConAviso
+                    : filtroPagos === 'proximos' ? pagosProximos7Dias
+                    : filtroPagos === 'vencidos' ? pagosVencidos
+                    : pagosPendientes).filter(coincideBusquedaPago).map((pago) => (
                     <div
   className="tarjeta-pago-completa"
   key={pago.id}
@@ -5250,6 +5310,7 @@ const esMesActual =
       <h2>Ajustes</h2>
     </div>
 
+    <div className="grupo-ajustes"><h3>Mis proyectos</h3><div className="tarjeta-ajustes"><button type="button" className="metas-principal" onClick={() => setPantalla('metas-personales')}>✦ Mis metas y ahorros privados</button><p style={{fontSize:12,color:'#64748b'}}>Solo tú puedes ver estas metas. No se comparten con los integrantes de Nuestro hogar.</p></div></div>
     {/* ================= MI PERFIL ================= */}
 
     <div className="grupo-ajustes">
@@ -5927,41 +5988,21 @@ const esMesActual =
       </div>
     </div>
 
-    {/* ================= FUNCIÓN FUTURA ================= */}
-
+    {/* ACCESO A ESPACIO COMPARTIDO DESDE AJUSTES */}
     <div className="grupo-ajustes">
-      <h3>Funciones futuras</h3>
-
+      <h3>Espacio compartido</h3>
       <div className="tarjeta-ajustes">
-        <div className="funcion-futura">
-          <div className="icono-funcion-futura">
-            ⇄
-          </div>
-
-          <div>
-            <div className="titulo-funcion-futura">
-              <strong>
-                Espacio compartido
-              </strong>
-
-              <span>
-                Opcional
-              </span>
-            </div>
-
-            <p>
-              En el futuro podrás crear un espacio
-              independiente para compartir únicamente
-              los gastos que tú decidas con otra
-              persona.
-            </p>
-
-            <small>
-              Tus finanzas personales permanecerán
-              separadas.
+        <button type="button" onClick={() => setPantalla('administrar-compartido')}
+          style={{display:'flex',width:'100%',alignItems:'center',gap:14,textAlign:'left',padding:16,border:0,background:'transparent',cursor:'pointer',color:'inherit'}}>
+          <span style={{fontSize:24}}>⇄</span>
+          <span style={{flex:1}}>
+            <strong>{tieneEspacioCompartido ? 'Administrar espacio compartido' : 'Activar espacio compartido'}</strong>
+            <small style={{display:'block',marginTop:5}}>
+              {tieneEspacioCompartido ? 'Integrantes, invitaciones y desvinculación.' : 'Crea un espacio o únete mediante una invitación.'}
             </small>
-          </div>
-        </div>
+          </span>
+          <span aria-hidden="true">›</span>
+        </button>
       </div>
     </div>
 
@@ -5974,8 +6015,9 @@ const esMesActual =
 
       {/* ================= MENÚ INFERIOR ================= */}
 
-      <nav className="menu-inferior">
+      <nav className="menu-inferior" style={{display:"grid",gridTemplateColumns:`repeat(${tieneEspacioCompartido ? 5 : 4}, minmax(0, 1fr))`,flexWrap:"nowrap",gap:0,alignItems:"stretch"}}>
   <button
+    style={{minWidth:0,width:"100%",padding:"8px 2px",fontSize:tieneEspacioCompartido?"10px":undefined}}
     className={pantalla === 'inicio' ? 'activo' : ''}
     onClick={() => setPantalla('inicio')}
   >
@@ -5984,6 +6026,7 @@ const esMesActual =
   </button>
 
   <button
+    style={{minWidth:0,width:"100%",padding:"8px 2px",fontSize:tieneEspacioCompartido?"10px":undefined}}
     className={pantalla === 'movimientos' ? 'activo' : ''}
     onClick={() => setPantalla('movimientos')}
   >
@@ -5992,6 +6035,7 @@ const esMesActual =
   </button>
 
   <button
+    style={{minWidth:0,width:"100%",padding:"8px 2px",fontSize:tieneEspacioCompartido?"10px":undefined}}
     className={pantalla === 'pagos' ? 'activo' : ''}
     onClick={() => setPantalla('pagos')}
   >
@@ -5999,7 +6043,9 @@ const esMesActual =
     Pagos
   </button>
 
+  {tieneEspacioCompartido && <button style={{minWidth:0,width:'100%',padding:'8px 2px',fontSize:'10px'}} className={pantalla === 'compartido' ? 'activo' : ''} onClick={() => setPantalla('compartido')}><span>⇄</span>Compartido</button>}
   <button
+    style={{minWidth:0,width:"100%",padding:"8px 2px",fontSize:tieneEspacioCompartido?"10px":undefined}}
     className={pantalla === 'ajustes' ? 'activo' : ''}
     onClick={() => setPantalla('ajustes')}
   >
