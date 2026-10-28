@@ -69,25 +69,60 @@ export async function activarNotificacionesPush() {
 
   const datos = suscripcion.toJSON()
 
+// Comprobar si este dispositivo ya pertenece a la cuenta actual.
+const { data: registroExistente, error: errorConsulta } =
+  await supabase
+    .from('push_suscripciones')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('endpoint', suscripcion.endpoint)
+    .maybeSingle()
+
+if (errorConsulta) {
+  throw new Error(
+    `No se pudo verificar el dispositivo: ${errorConsulta.message}`
+  )
+}
+
+if (registroExistente) {
+  // Actualizar únicamente el registro de este usuario.
   const { error } = await supabase
     .from('push_suscripciones')
-    .upsert({
+    .update({
+      p256dh: datos.keys.p256dh,
+      auth: datos.keys.auth,
+      actualizado_en: new Date().toISOString(),
+    })
+    .eq('id', registroExistente.id)
+    .eq('user_id', user.id)
+
+  if (error) {
+    throw new Error(`No se pudo actualizar el dispositivo: ${error.message}`)
+  }
+} else {
+  // Crear una suscripción nueva sin transferir registros de otras cuentas.
+  const { error } = await supabase
+    .from('push_suscripciones')
+    .insert({
       user_id: user.id,
       endpoint: suscripcion.endpoint,
       p256dh: datos.keys.p256dh,
       auth: datos.keys.auth,
-      actualizado_en: new Date().toISOString(),
-    }, {
-      onConflict: 'endpoint',
     })
 
   if (error) {
-    throw new Error(
-      `No se pudo registrar el dispositivo: ${error.message}`
-    )
-  }
+    if (error.code === '23505') {
+      throw new Error(
+        'Este dispositivo tiene una suscripción registrada anteriormente. ' +
+        'Por seguridad, no podemos vincularla a otra cuenta automáticamente.'
+      )
+    }
 
-  return true
+    throw new Error(`No se pudo registrar el dispositivo: ${error.message}`)
+  }
+}
+
+return true
 }
 
 export async function desactivarNotificacionesPush() {
