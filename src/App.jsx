@@ -4350,6 +4350,39 @@ const esMesActual =
           + Registrar movimiento
         </button>
 
+        {/* ================= AVISOS DE PAGOS ================= */}
+
+{ajustes.recordatorios &&
+  pagosConAviso.length > 0 && (
+    <section className="aviso-pagos aviso-pagos-prioritario" role="button" tabIndex={0}
+      style={{ cursor: 'pointer' }}
+      onClick={() => { setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') } }}
+      title="Ver pagos que requieren atención">
+      <div className="aviso-pagos-icono" aria-hidden="true">
+        !
+      </div>
+
+      <div className="aviso-pagos-contenido">
+        <span>
+          🚨 ATENCIÓN · PAGOS PENDIENTES
+        </span>
+
+        <strong>
+          {formatoDinero(montoConAviso)}
+        </strong>
+
+        <p>
+          {pagosVencidos.length > 0
+            ? `${pagosVencidos.length} vencido${pagosVencidos.length === 1 ? '' : 's'} · ${pagosConAviso.length} pago${pagosConAviso.length === 1 ? '' : 's'} requieren atención.`
+            : `${pagosConAviso.length} pago${pagosConAviso.length === 1 ? '' : 's'} por vencer.`}
+        </p>
+        <small>Ver pagos y marcarlos como pagados →</small>
+      </div>
+    </section>
+  )}
+
+
         {/* ================= MOVIMIENTOS ================= */}
 
         <section className="movimientos-recientes">
@@ -4447,38 +4480,6 @@ const esMesActual =
         </section>
 
         {/* ================= PRÓXIMOS PAGOS ================= */}
-
-        {/* ================= AVISOS DE PAGOS ================= */}
-
-{ajustes.recordatorios &&
-  pagosConAviso.length > 0 && (
-    <section className="aviso-pagos" role="button" tabIndex={0}
-      style={{ cursor: 'pointer' }}
-      onClick={() => { setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBusquedaPago(''); setFiltroPagos('avisos'); setPantalla('pagos') } }}
-      title="Ver pagos que requieren atención">
-      <div className="aviso-pagos-icono">
-        !
-      </div>
-
-      <div className="aviso-pagos-contenido">
-        <span>
-          Pagos que requieren atención
-        </span>
-
-        <strong>
-          {formatoDinero(montoConAviso)}
-        </strong>
-
-        <p>
-          {pagosConAviso.length === 1
-            ? 'Tienes 1 pago dentro de tu periodo de aviso.'
-            : `Tienes ${pagosConAviso.length} pagos dentro de tu periodo de aviso.`}
-        </p>
-        <small>Ver pagos y marcarlos como pagados →</small>
-      </div>
-    </section>
-  )}
 
         {/* ================= PRÓXIMOS 7 DÍAS ================= */}
 

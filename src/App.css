@@ -2500,3 +2500,30 @@ button {
   width: 100%;
   min-width: 0;
 }
+/* Paso 200J.121 — agregar al final de src/App.css */
+.aviso-pagos-prioritario {
+  margin: 18px 0 24px;
+  padding: 22px 18px;
+  border: 3px solid #dc2626;
+  border-radius: 18px;
+  background: #fff1f2;
+  color: #881337;
+  box-shadow: 0 8px 22px rgba(190, 24, 93, .18);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+}
+.aviso-pagos-prioritario:focus-visible { outline: 4px solid #2563eb; outline-offset: 3px; }
+.aviso-pagos-prioritario .aviso-pagos-icono {
+  background: #dc2626; color: white; border-radius: 50%;
+  min-width: 48px; height: 48px; display: grid; place-items: center;
+  font-size: 30px; font-weight: 900;
+}
+.aviso-pagos-prioritario .aviso-pagos-contenido { min-width: 0; flex: 1; }
+.aviso-pagos-prioritario .aviso-pagos-contenido > span { font-size: 12px; font-weight: 900; letter-spacing: .5px; }
+.aviso-pagos-prioritario .aviso-pagos-contenido > strong {
+  display: block; font-size: clamp(25px, 7vw, 36px); line-height: 1.2; margin: 5px 0; color: #991b1b;
+}
+.aviso-pagos-prioritario .aviso-pagos-contenido p { font-weight: 650; margin: 6px 0; }
+.aviso-pagos-prioritario .aviso-pagos-contenido small { text-decoration: underline; font-weight: 800; }
